@@ -1,0 +1,37 @@
+# 构建工具链（JDK + Android SDK，约 700 MB，不入库）
+.toolchain/
+tools/_dl/
+
+# 构建产物
+build/
+build-log.txt
+*.arg
+*.args
+*.class
+
+# 打包输出（APK 用 Releases 发布，不进仓库）
+dist/
+*.apk
+*.idsig
+
+# 签名材料 —— 绝对不要提交
+keystore/
+*.jks
+*.keystore
+
+# 测试临时文件
+test/out/
+test/out2/
+test/*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 素材源图（体积大，需要的自行准备）
+素材-原图/
+*.psd
