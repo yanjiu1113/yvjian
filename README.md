@@ -6,6 +6,8 @@
 
 > 审查与过滤取决于你调用的模型和服务端策略，不在这个客户端里。
 
+[MIT](LICENSE) · Android 8.0+ · 约 0.5 MB
+
 - 安装包 **不到 0.5 MB**，不内置模型、无第三方埋点
 - `minSdk 26`（Android 8.0+），`targetSdk 34`
 - 协议：OpenAI 兼容（`{baseUrl}/chat/completions`、`{baseUrl}/models`）
@@ -103,4 +105,6 @@ build.ps1               构建脚本
 
 ## 许可证
 
-待定（提交前请确认）。
+[MIT](LICENSE) © 2026 yanjiu1113
+
+简单说：随便用、随便改、随便分发，包括商用；保留版权声明即可，出了事别找我。
