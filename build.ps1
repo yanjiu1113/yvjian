@@ -27,7 +27,7 @@ Write-Host "==> aapt2 compile"
 Run "$bt\aapt2.exe" "compile --dir `"$src\res`" -o `"$out\res.zip`""
 
 Write-Host "==> aapt2 link"
-Run "$bt\aapt2.exe" "link -o `"$out\base.apk`" -I `"$androidJar`" --manifest `"$src\AndroidManifest.xml`" -R `"$out\res.zip`" -A `"$src\assets`" --min-sdk-version 26 --target-sdk-version 34 --version-code 43 --version-name 3.8 --no-version-vectors"
+Run "$bt\aapt2.exe" "link -o `"$out\base.apk`" -I `"$androidJar`" --manifest `"$src\AndroidManifest.xml`" -R `"$out\res.zip`" -A `"$src\assets`" --min-sdk-version 26 --target-sdk-version 34 --version-code 65 --version-name 3.30 --no-version-vectors"
 
 Write-Host "==> javac"
 $files = Get-ChildItem (Join-Path $src "java") -Recurse -Filter *.java | ForEach-Object { $_.FullName.Replace('\', '/') }
@@ -68,7 +68,7 @@ if (-not (Test-Path $ks)) {
 }
 
 Write-Host "==> apksigner"
-$apk = Join-Path $dist "Yujian-3.8.apk"
+$apk = Join-Path $dist "Yujian-3.30.apk"
 Run "$bt\apksigner.bat" "sign --ks `"$ks`" --ks-pass pass:llmchat-local --key-pass pass:llmchat-local --v1-signing-enabled true --v2-signing-enabled true --out `"$apk`" `"$out\aligned.apk`""
 
 Write-Host "==> verify"

@@ -26,7 +26,11 @@ public final class Http {
 
         void onError(String message);
 
-        /** Called once before onDone when the model asked for function/tool calls. */
+        /** Token 用量（需要在请求里带 stream_options.include_usage） */
+    default void onUsage(int prompt, int completion) {
+    }
+
+    /** Called once before onDone when the model asked for function/tool calls. */
         default void onToolCalls(org.json.JSONArray calls) {
         }
     }
@@ -175,6 +179,18 @@ public final class Http {
     }
 
     /** GET {base}/models -> {"models":[{"id":..,"name":..}]} */
+    /** 通用 GET（用于余额查询这类非 OpenAI 标准接口），失败返回 null */
+    public static JSONObject getJson(String url, String apiKey) throws Exception {
+        HttpURLConnection c = open(url, apiKey, "GET", null);
+        int code = c.getResponseCode();
+        String text = drain(code >= 400 ? c.getErrorStream() : body(c));
+        c.disconnect();
+        if (code >= 400) return null;
+        String raw = text == null ? "" : text.trim();
+        if (!raw.startsWith("{")) return null;
+        return new JSONObject(raw);
+    }
+
     public static JSONArray fetchModels(String baseUrl, String apiKey) throws Exception {
         String url = clean(baseUrl) + "/models";
         HttpURLConnection c = open(url, apiKey, "GET", null);
@@ -243,6 +259,10 @@ public final class Http {
                         if (tcs != null && tcs.length() > 0) l.onToolCalls(tcs);
                     }
                 }
+                JSONObject u1 = o.optJSONObject("usage");
+                if (u1 != null) {
+                    l.onUsage(u1.optInt("prompt_tokens", 0), u1.optInt("completion_tokens", 0));
+                }
                 if (o.has("error")) {
                     l.onError(errorMessage(200, text));
                     return;
@@ -267,6 +287,12 @@ public final class Http {
                     if (o.has("error")) {
                         l.onError(errorMessage(200, data));
                         return;
+                    }
+                    JSONObject u = o.optJSONObject("usage");
+                    if (u != null) {
+                        int pt = u.optInt("prompt_tokens", 0);
+                        int ctk = u.optInt("completion_tokens", 0);
+                        if (pt > 0 || ctk > 0) l.onUsage(pt, ctk);
                     }
                     JSONArray ch = o.optJSONArray("choices");
                     if (ch == null || ch.length() == 0) continue;

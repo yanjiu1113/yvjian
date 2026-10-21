@@ -495,7 +495,7 @@ E.t.state.meta.chatBackground = { preset: "none", image: "data:image/jpeg;base64
 E.t.applyBackground();
 check("image background applied", bgEl.style.backgroundImage.indexOf("url(") >= 0);
 check("image background honours dim", bgEl.style.backgroundImage.indexOf("0.3") >= 0, bgEl.style.backgroundImage);
-check("image background uses cover", bgEl.style.backgroundSize === "cover");
+check("image background uses cover", bgEl.style.backgroundSize.indexOf("cover") >= 0, bgEl.style.backgroundSize);
 
 E.t.state.meta.chatBackground = { preset: "none", image: "", dim: 0.45 };
 E.t.applyBackground();
@@ -629,8 +629,10 @@ M.t.sendCore("讲个笑话", []);
 const mtools = M.calls.chat[0].tools || [];
 check("send_sticker tool is declared", mtools.some((x) => x["function"].name === "send_sticker"));
 const stickerTool = mtools.filter((x) => x["function"].name === "send_sticker")[0];
-check("sticker tool enum lists categories",
+check("sticker tool lists categories in description",
   JSON.stringify(stickerTool["function"].parameters).indexOf("傲娇") >= 0);
+check("sticker tool has no enum (deepseek compat)",
+  JSON.stringify(stickerTool["function"].parameters).indexOf("enum") < 0);
 
 const mId = M.calls.chat[0].msgId;
 M.sandbox.__bridge.onChunk(JSON.stringify({ id: mId, c: "哈哈哈", r: "" }));
@@ -695,5 +697,52 @@ check("speech text has no markup", Q.calls.speech[0].indexOf("**") < 0);
 
 Q.sandbox.__bridge.onTts(JSON.stringify({ state: "done", detail: "api" }));
 check("tts done clears speaking state", Q.t.state.tts.speakingId === "");
+// 分类名容错：模型给了带引号/空格的分类，应匹配到真实分类
+const FZ = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });
+FZ.t.state.cur.stickerAuto = true;
+FZ.t.state.stickers = { tree: true, categories: [{ name: "悲伤", count: 2 }] };
+FZ.t.state.cur.messages = [];
+FZ.t.sendCore("叹口气", []);
+FZ.sandbox.__bridge.onDone(JSON.stringify({
+  id: FZ.calls.chat[0].msgId,
+  tools: [{ id: "f1", name: "send_sticker", args: '{"category":"「悲伤」"}' }]
+}));
+check("fuzzy match strips quotes around category", FZ.calls.stickers.indexOf("悲伤") >= 0, JSON.stringify(FZ.calls.stickers));
+
+// 完全不相关的分类不应乱配
+const FZ2 = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });
+FZ2.t.state.cur.stickerAuto = true;
+FZ2.t.state.stickers = { tree: true, categories: [{ name: "开心", count: 1 }] };
+FZ2.t.state.cur.messages = [];
+FZ2.t.sendCore("随便说说", []);
+FZ2.sandbox.__bridge.onDone(JSON.stringify({
+  id: FZ2.calls.chat[0].msgId,
+  tools: [{ id: "g1", name: "send_sticker", args: '{"category":"愤怒"}' }]
+}));
+check("unrelated category is not force-matched", FZ2.calls.stickers.length === 0, JSON.stringify(FZ2.calls.stickers));
+// 全局兜底：100% 时模型没发也会补「默认」分类
+const GS = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });
+GS.t.state.cur.stickerAuto = true;
+GS.t.state.meta.stickerGlobal = 100;
+GS.t.state.stickers = { tree: true, categories: [{ name: "默认", count: 3 }, { name: "开心", count: 2 }] };
+GS.t.state.cur.messages = [];
+GS.t.sendCore("今天天气还不错吧", []);
+GS.sandbox.__bridge.onChunk(JSON.stringify({ id: GS.calls.chat[0].msgId, c: "今天天气确实不错，适合出门走走。", r: "" }));
+GS.sandbox.__bridge.onDone(JSON.stringify({ id: GS.calls.chat[0].msgId, tools: [] }));
+check("global 100% sends default sticker when model silent", GS.calls.stickers.indexOf("默认") >= 0, JSON.stringify(GS.calls.stickers));
+
+// 「默认」不出现在给模型的分类列表里
+const names = JSON.stringify((GS.calls.chat[0].tools || []));
+check("default category hidden from model tool schema", names.indexOf("默认") < 0);
+
+// 报错轮不发
+const GE = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });
+GE.t.state.cur.stickerAuto = true;
+GE.t.state.meta.stickerGlobal = 100;
+GE.t.state.stickers = { tree: true, categories: [{ name: "默认", count: 3 }] };
+GE.t.state.cur.messages = [];
+GE.t.sendCore("随便", []);
+GE.sandbox.__bridge.onDone(JSON.stringify({ id: GE.calls.chat[0].msgId, tools: [], err: "出错了" }));
+check("no sticker on error turn", GE.calls.stickers.length === 0, JSON.stringify(GE.calls.stickers));
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

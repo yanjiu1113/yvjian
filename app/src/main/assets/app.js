@@ -16,6 +16,11 @@
     meta: {
       avatars: { user: '', assistant: '' },
       bubble: { user: 'classic', assistant: 'cream' },
+      stickerGlobal: 0,
+      showQuota: false,
+      petPos: null,
+      usage: { p: 0, c: 0, rounds: 0 },
+      particleDensity: 0.6,
       stickerPacks: [],
       search: { engine: 'duckduckgo' },
       chatBackground: { preset: 'none', image: '', dim: 0.45 },
@@ -120,13 +125,9 @@
   }
   function saveMeta() {
     try {
-      Native.saveMeta(JSON.stringify({
-        avatars: state.meta.avatars,
-        stickerPacks: state.meta.stickerPacks,
-        search: state.meta.search,
-        chatBackground: state.meta.chatBackground,
-        packId: state.packId
-      }));
+      // 整份存：以前用白名单，导致 bubble / stickerProb / stickerGlobal / tts 全部丢失
+      state.meta.packId = state.packId;
+      Native.saveMeta(JSON.stringify(state.meta));
     } catch (e) { }
   }
 
@@ -443,6 +444,28 @@
     return d;
   }
 
+  /** 等待首字的占位（带思考表情） */
+  function waitingHtml() {
+    return '<span class="waiting">' +
+      '<img class="wait-face" src="face-normal.webp" alt="">' +
+      '<span class="wait-dots"><i></i><i></i><i></i></span></span>';
+  }
+
+  /** 报错块（带生气表情） */
+  function buildErrorNode(text) {
+    var e = document.createElement('div');
+    e.className = 'msg-error';
+    var img = document.createElement('img');
+    img.className = 'err-face';
+    img.src = 'face-angry.webp';
+    img.alt = '';
+    e.appendChild(img);
+    var span = document.createElement('span');
+    span.className = 'err-text';
+    span.textContent = text || '';
+    e.appendChild(span);
+    return e;
+  }
   function msgNode(m) {
     var wrap = document.createElement('div');
     wrap.className = 'msg ' + m.role;
@@ -546,9 +569,7 @@
     var body = document.createElement('div');
     body.className = 'body md';
     if (waiting) {
-      body.innerHTML = '<span class="waiting">' +
-        '<img class="wait-face" src="face-normal.webp" alt="">' +
-        '<span class="wait-dots"><i></i><i></i><i></i></span></span>';
+      body.innerHTML = waitingHtml();
     } else {
       body.innerHTML = md(stripSearchDisplay(stripEmo(m.content))) + (m.streaming ? '<span class="caret"></span>' : '');
     }
@@ -562,19 +583,7 @@
     }
     col.appendChild(body);
 
-    if (m.error) {
-      var e = document.createElement('div');
-      e.className = 'msg-error';
-      var fe = document.createElement('img');
-      fe.className = 'err-face';
-      fe.src = 'face-angry.webp';
-      fe.alt = '';
-      e.appendChild(fe);
-      var et = document.createElement('span');
-      et.textContent = m.error;
-      e.appendChild(et);
-      col.appendChild(e);
-    }
+    if (m.error) col.appendChild(buildErrorNode(m.error));
 
     var acts = document.createElement('div');
     acts.className = 'msg-actions';
@@ -642,6 +651,8 @@
     }
 
     s.messages.forEach(function (m) { box.appendChild(msgNode(m)); });
+    var bgNow = state.meta.chatBackground || {};
+    if (!bgNow.image && IMAGE_BG[bgNow.preset]) ensureParticles(IMAGE_BG[bgNow.preset].kind);
     scrollBottom(true);
   }
 
@@ -657,7 +668,11 @@
     var body = node.querySelector('.body');
     if (body) {
       var keepPeek = body.querySelector('.peek');
-      body.innerHTML = md(stripSearchDisplay(stripEmo(m.content))) + (m.streaming ? '<span class="caret"></span>' : '');
+      if (m.streaming && !(m.content || '').trim()) {
+        body.innerHTML = waitingHtml();
+      } else {
+        body.innerHTML = md(stripSearchDisplay(stripEmo(m.content))) + (m.streaming ? '<span class="caret"></span>' : '');
+      }
       if (keepPeek) body.insertBefore(keepPeek, body.firstChild);
     }
 
@@ -676,15 +691,157 @@
     if (m.error) {
       var err = node.querySelector('.msg-error');
       if (!err) {
-        err = document.createElement('div');
-        err.className = 'msg-error';
+        err = buildErrorNode(m.error);
         var acts = node.querySelector('.msg-actions');
         if (acts && acts.parentNode) acts.parentNode.insertBefore(err, acts); else node.appendChild(err);
+      } else {
+        var etxt = err.querySelector('.err-text');
+        if (etxt) etxt.textContent = m.error;
+        else {
+          // 旧节点没有表情，重建
+          var fresh = buildErrorNode(m.error);
+          err.parentNode.replaceChild(fresh, err);
+        }
       }
-      err.textContent = m.error;
     }
 
     if (nearBottom) scrollBottom(true);
+  }
+
+  // ---- 额度桌宠 ----
+  function fmtTok(n) {
+    n = n || 0;
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return String(n);
+  }
+
+  function petFaceSize() {
+    return 42;
+  }
+
+  function clampPet(x, y) {
+    var s = petFaceSize();
+    var maxX = Math.max(0, (window.innerWidth || 360) - s);
+    var maxY = Math.max(0, (window.innerHeight || 640) - s);
+    return {
+      x: Math.max(0, Math.min(maxX, Math.round(x))),
+      y: Math.max(0, Math.min(maxY, Math.round(y)))
+    };
+  }
+
+  function petDefaultPos() {
+    var h = 0;
+    try {
+      var c = document.querySelector('.composer');
+      if (c && c.getBoundingClientRect) h = c.getBoundingClientRect().height || 0;
+    } catch (e) { }
+    return clampPet((window.innerWidth || 360) - 62, (window.innerHeight || 640) - h - 62);
+  }
+
+  function ensurePetEl() {
+    var box = document.querySelector('#pet');
+    if (box) return box;
+    box = document.createElement('div');
+    box.id = 'pet';
+    box.className = 'pet';
+    box.innerHTML = '<div class="pet-bubble" id="pet-text"></div>' +
+      '<img class="pet-face" src="avatar-ai.webp" alt="">';
+    try { document.body.appendChild(box); } catch (e) { }
+    bindPetDrag(box);
+    return box;
+  }
+
+  function setPetBubble(text, ms) {
+    var box = document.querySelector('#pet');
+    if (!box) return;
+    var el = document.querySelector('#pet-text');
+    if (el) el.textContent = text || '';
+    box.classList.add('bubble-on');
+    if (state.petTimer) { clearTimeout(state.petTimer); state.petTimer = null; }
+    if (ms > 0) {
+      state.petTimer = setTimeout(function () {
+        var b = document.querySelector('#pet');
+        if (b) b.classList.remove('bubble-on');
+        state.petTimer = null;
+      }, ms);
+    }
+  }
+
+  function hidePetBubble() {
+    var box = document.querySelector('#pet');
+    if (box) box.classList.remove('bubble-on');
+    if (state.petTimer) { clearTimeout(state.petTimer); state.petTimer = null; }
+  }
+
+  function bindPetDrag(box) {
+    var dragging = false, moved = false;
+    var sx = 0, sy = 0, ox = 0, oy = 0;
+
+    function point(e) {
+      var t = e.touches && e.touches[0] ? e.touches[0] : e;
+      return { x: t.clientX, y: t.clientY };
+    }
+
+    function down(e) {
+      var p = point(e);
+      dragging = true;
+      moved = false;
+      sx = p.x; sy = p.y;
+      var r = box.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      box.classList.add('dragging');
+      if (e.preventDefault && e.cancelable) e.preventDefault();
+    }
+
+    function move(e) {
+      if (!dragging) return;
+      var p = point(e);
+      var dx = p.x - sx, dy = p.y - sy;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+      var pos = clampPet(ox + dx, oy + dy);
+      box.style.left = pos.x + 'px';
+      box.style.top = pos.y + 'px';
+      box.classList.toggle('flip', pos.x < 140);
+      if (e.preventDefault && e.cancelable) e.preventDefault();
+    }
+
+    function up() {
+      if (!dragging) return;
+      dragging = false;
+      box.classList.remove('dragging');
+      var r = box.getBoundingClientRect();
+      state.meta.petPos = clampPet(r.left, r.top);
+      saveMeta();
+      if (!moved) {
+        // 单击：查余额
+        try {
+          Native.fetchBalance((state.cur && state.cur.providerId) || '');
+        } catch (err) { }
+      }
+    }
+
+    box.addEventListener('touchstart', down, { passive: false });
+    box.addEventListener('touchmove', move, { passive: false });
+    box.addEventListener('touchend', up);
+    box.addEventListener('mousedown', down);
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
+
+  function renderPet() {
+    var box = ensurePetEl();
+    var on = !!state.meta.showQuota;
+    box.classList.toggle('show', on);
+    if (!on) { hidePetBubble(); return; }
+    if (!state.meta.petPos) state.meta.petPos = petDefaultPos();
+    var pos = clampPet(state.meta.petPos.x, state.meta.petPos.y);
+    box.style.left = pos.x + 'px';
+    box.style.top = pos.y + 'px';
+    box.classList.toggle('flip', pos.x < 140);
+    if (box.classList.contains('bubble-on')) return;
+    var el = document.querySelector('#pet-text');
+    if (el && !el.textContent) el.textContent = '点我查余额';
   }
 
   function renderComposer() {
@@ -869,7 +1026,8 @@
     var names = [];
     var folderCats = (state.stickers && state.stickers.categories) || [];
     for (var i = 0; i < folderCats.length; i++) {
-      if (folderCats[i].count > 0) names.push(folderCats[i].name);
+      // 「默认」是兜底分类，不参与模型选择，模型看不到它
+      if (folderCats[i].count > 0 && folderCats[i].name !== '默认') names.push(folderCats[i].name);
     }
     if (!names.length) {
       var packs = state.meta.stickerPacks || [];
@@ -881,18 +1039,23 @@
   }
 
   function stickerTools(names) {
+    // 注意：不要用 enum。实测 deepseek-flash / v4-pro 遇到中文 enum 会直接返回空内容，
+    // 改成在 description 里列分类、参数用普通 string，模型能正常调用。
     return [{
       type: 'function',
       function: {
         name: 'send_sticker',
-        description: '发一张表情包。只能使用给定的分类名；客户端会从该分类里随机挑一张图发出去。',
+        description: '发一张情绪表情包。客户端会从指定分类里随机挑一张图发出去。' +
+          '只有在对话情绪明显、且分类列表里有合适选项时才调用；' +
+          '没有合适的分类就不要调用这个工具，直接正常回复文字。' +
+          '分类名必须原样来自列表，不要自己编造、不要翻译、不要加引号。',
         parameters: {
           type: 'object',
           properties: {
             category: {
               type: 'string',
-              enum: names,
-              description: '情绪分类，必须是这些之一：' + names.join('、')
+              description: '情绪分类名，只能从以下列表里选一个（原样输出，不要加引号或解释）：' +
+                names.join('、')
             }
           },
           required: ['category']
@@ -1057,6 +1220,7 @@
       topP: typeof s.topP === 'number' ? s.topP : -1,
       stream: s.stream !== false
     };
+    if (payload.stream) payload.streamOptions = { include_usage: true };
     var tools = chatTools(s, allowTools);
     if (tools.length) {
       payload.tools = tools;
@@ -1137,6 +1301,7 @@
       topP: typeof s.topP === 'number' ? s.topP : -1,
       stream: s.stream !== false
     };
+    if (payload.stream) payload.streamOptions = { include_usage: true };
     var tools = chatTools(s, allowTools);
     if (tools.length) {
       payload.tools = tools;
@@ -1240,7 +1405,11 @@
   function closeSheet() {
     $('#sheet').classList.remove('open');
     state.open.sheet = false;
+    var wasSection = !!state.sheetSection;
+    state.sheetSection = null;
     syncOverlay();
+    // 分区面板关掉后重建设置页，让摘要跟着状态更新
+    if (wasSection && state.open.settings) renderSettings();
   }
 
   function closeTop() {
@@ -1302,6 +1471,9 @@
     dusk: 'linear-gradient(165deg, #2a1f3a 0%, #141620 55%, #0f1115 100%)',
     mist: 'linear-gradient(180deg, #17242f 0%, #0f1115 72%)',
     sand: 'linear-gradient(160deg, #3a2f24 0%, #1a1512 58%, #0f1115 100%)',
+    pink: '',
+    starry: '',
+    moon: '',
     fox: 'radial-gradient(120% 80% at 82% 108%, rgba(210, 86, 78, .22) 0%, rgba(15, 17, 21, 0) 58%), linear-gradient(170deg, #201821 0%, #140f15 55%, #0f1115 100%)'
   };
 
@@ -1310,31 +1482,279 @@
     var b = (state.meta && state.meta.bubble) || {};
     document.body.classList.toggle('bubble-user-cream', b.user === 'cream');
     document.body.classList.toggle('bubble-ai-classic', b.assistant === 'classic');
+    var a = typeof state.meta.bubbleAlpha === 'number' ? state.meta.bubbleAlpha : 1;
+    try {
+      if (document.documentElement.style.setProperty) {
+        document.documentElement.style.setProperty('--bubble-alpha', a);
+      }
+    } catch (e) { }
   }
+  // ---- 粉霞背景的花瓣粒子 ----
+  var PARTICLE_MAX = { petal: 24, mote: 30 };
+
+  function particleDensity() {
+    var d = state.meta && typeof state.meta.particleDensity === 'number' ? state.meta.particleDensity : 0.6;
+    return Math.max(0, Math.min(1, d));
+  }
+
+  function particleCount(kind) {
+    return Math.round(PARTICLE_MAX[kind] * particleDensity());
+  }
+
+  function buildMoteHtml(count) {
+    var out = '';
+    for (var i = 0; i < count; i++) {
+      var size = 2 + Math.round(Math.random() * 3);          // 2-5px
+      var left = Math.round(Math.random() * 100);
+      var top = Math.round(Math.random() * 100);
+      var dur = (16 + Math.random() * 14).toFixed(1);
+      var delay = (-Math.random() * 30).toFixed(1);
+      var op = (0.18 + Math.random() * 0.4).toFixed(2);
+      var dx = Math.round(-30 + Math.random() * 60);
+      var dy = Math.round(-80 - Math.random() * 120);
+      out += '<span style="left:' + left + '%;top:' + top + '%;width:' + size + 'px;height:' + size + 'px;' +
+        'opacity:' + op + ';animation-duration:' + dur + 's;animation-delay:' + delay + 's;' +
+        '--dx:' + dx + 'px;--dy:' + dy + 'px"></span>';
+    }
+    return out;
+  }
+
+  function buildPetalHtml(count) {
+    var out = '';
+    for (var i = 0; i < count; i++) {
+      var size = 7 + Math.round(Math.random() * 7);          // 7-14px
+      var left = Math.round(Math.random() * 100);            // 0-100%
+      var dur = (14 + Math.random() * 12).toFixed(1);        // 14-26s
+      var delay = (-Math.random() * 26).toFixed(1);          // 负延迟，一开始就有花瓣在半空
+      var drift = Math.round(-40 + Math.random() * 120);     // 水平漂移
+      var op = (0.25 + Math.random() * 0.35).toFixed(2);
+      out += '<span style="left:' + left + '%;width:' + size + 'px;height:' + size + 'px;' +
+        'opacity:' + op + ';animation-duration:' + dur + 's;animation-delay:' + delay + 's;' +
+        '--drift:' + drift + 'px"></span>';
+    }
+    return out;
+  }
+
+  function syncComposerHeight() {
+    try {
+      var c = document.querySelector('.composer');
+      var h = (c && c.getBoundingClientRect) ? Math.round(c.getBoundingClientRect().height) : 0;
+      document.documentElement.style.setProperty('--composer-h', (h || 0) + 'px');
+    } catch (e) { }
+  }
+
+  function ensureParticles(kind) {
+    var el = $('#messages');
+    if (!el) return;
+    syncComposerHeight();
+    var cls = kind === 'mote' ? 'motes' : 'petals';
+    var have = el.querySelector('.petals') || el.querySelector('.motes');
+    if (have && have.className === cls) return;
+    if (have && have.parentNode && have.parentNode.removeChild) have.parentNode.removeChild(have);
+    var n = particleCount(kind === 'mote' ? 'mote' : 'petal');
+    if (n <= 0) return;
+    var box = document.createElement('div');
+    box.className = cls;
+    box.innerHTML = kind === 'mote' ? buildMoteHtml(n) : buildPetalHtml(n);
+    el.insertBefore(box, el.firstChild);
+  }
+
+  function removeParticles() {
+    try {
+      var el = $('#messages');
+      if (!el) return;
+      ['petals', 'motes'].forEach(function (c) {
+        var box = el.querySelector('.' + c);
+        if (!box) return;
+        if (box.parentNode && box.parentNode.removeChild) box.parentNode.removeChild(box);
+        else if (box.remove) box.remove();
+      });
+    } catch (e) { }
+  }
+  // 带图片 + 粒子的预设主题
+  var IMAGE_BG = {
+    pink:   { file: 'bg-pink.webp',   kind: 'petal' },
+    starry: { file: 'bg-starry.webp', kind: 'mote' },
+    moon:   { file: 'bg-moon.webp',   kind: 'mote' }
+  };
+
   function applyBackground() {
     var el = $('#messages');
     if (!el) return;
     var bg = state.meta.chatBackground || {};
     var dim = typeof bg.dim === 'number' ? bg.dim : 0.45;
+    var imgPreset = (!bg.image && IMAGE_BG[bg.preset]) ? IMAGE_BG[bg.preset] : null;
     el.classList.toggle('bg-fox', !bg.image && bg.preset === 'fox');
+    el.classList.toggle('bg-pink', !!imgPreset);
+    if (imgPreset) ensureParticles(imgPreset.kind); else removeParticles();
+
+    // 亮度调节 = 在图上叠一层深色遮罩，0 = 原图，越大越暗
+    var shade = 'linear-gradient(rgba(15,17,21,' + dim + '), rgba(15,17,21,' + dim + '))';
+
     if (bg.image) {
-      el.style.backgroundImage = 'linear-gradient(rgba(15,17,21,' + dim + '), rgba(15,17,21,' + dim + ')), url("' + bg.image + '")';
-      el.style.backgroundSize = 'cover';
-      el.style.backgroundPosition = 'center';
-      el.style.backgroundRepeat = 'no-repeat';
+      el.style.backgroundImage = shade + ', url("' + bg.image + '")';
+      el.style.backgroundSize = 'cover, cover';
+      el.style.backgroundPosition = 'center, center';
+      el.style.backgroundRepeat = 'no-repeat, no-repeat';
+      el.style.backgroundAttachment = 'fixed, fixed';
+    } else if (imgPreset) {
+      el.style.backgroundImage = shade + ', url("' + imgPreset.file + '")';
+      el.style.backgroundSize = 'cover, cover';
+      el.style.backgroundPosition = 'center, center';
+      el.style.backgroundRepeat = 'no-repeat, no-repeat';
+      el.style.backgroundAttachment = 'fixed, fixed';
     } else if (bg.preset && bg.preset !== 'none' && BG_PRESETS[bg.preset]) {
       el.style.backgroundImage = BG_PRESETS[bg.preset];
       el.style.backgroundSize = '';
       el.style.backgroundPosition = '';
       el.style.backgroundRepeat = '';
+      el.style.backgroundAttachment = '';
     } else {
       el.style.backgroundImage = '';
       el.style.backgroundSize = '';
       el.style.backgroundPosition = '';
       el.style.backgroundRepeat = '';
+      el.style.backgroundAttachment = '';
     }
   }
 
+  /** 设置页分区：把长页面收进摘要卡片，点开才展示 */
+  var SECTION_GROUPS = {
+    providers: ['服务商'],
+    appearance: ['头像', '聊天气泡', '聊天背景'],
+    voice: ['语音朗读'],
+    stickers: ['表情包'],
+    about: ['诊断', '额度', '关于']
+  };
+
+  var SECTION_TITLES = {
+    providers: '服务商与模型',
+    appearance: '外观',
+    voice: '语音朗读',
+    stickers: '表情包',
+    about: '诊断与关于'
+  };
+
+  function sectionSummary(key) {
+    var s = state.cur || {};
+    if (key === 'providers') {
+      var p = provider(s.providerId);
+      if (!p) return '未配置';
+      return (p.name || '服务商') + ' · ' + (s.model || '未选模型');
+    }
+    if (key === 'appearance') {
+      var b = state.meta.bubble || {};
+      var av = state.meta.avatars || {};
+      var bgNames = { none: '无', space: '深空', dusk: '暮色', mist: '青灰', sand: '暖沙', fox: '语见', pink: '粉霞漫天', starry: '纸灯夜航', moon: '月照重楼' };
+      var bg = state.meta.chatBackground || {};
+      var bgTxt = bg.image ? '自定义图片' : (bgNames[bg.preset] || '无');
+      return '头像 ' + ((av.user || av.assistant) ? '自定义' : '默认') +
+        ' · 气泡 ' + (b.user === 'cream' ? '奶白' : '经典红') +
+        ' / ' + (b.assistant === 'classic' ? '深色' : '奶白') +
+        ' · 背景 ' + bgTxt;
+    }
+    if (key === 'voice') {
+      var n = stickerCategoryNames().length;
+      var rate = (state.tts && state.tts.rate ? state.tts.rate : 1).toFixed(1);
+      var txt = (s.autoRead ? '自动朗读' : '手动朗读') + ' · ' + rate + 'x';
+      if (!state.tts.engineCount) txt += ' · 未装引擎';
+      else if (state.tts.cloneTts) txt += ' · CloneTTS';
+      return txt;
+    }
+    if (key === 'stickers') {
+      var cats = (state.stickers && state.stickers.categories) || [];
+      if (!cats.length) return '未导入分类';
+      var g = typeof state.meta.stickerGlobal === 'number' ? state.meta.stickerGlobal : 0;
+      return cats.length + ' 个分类 · 主动 ' + g + '% · ' + (s.stickerAuto ? '开' : '关');
+    }
+    return 'v' + (window.APP_VERSION || '') + ' · 诊断日志';
+  }
+
+  function buildSummaryCards() {
+    var keys = ['providers', 'appearance', 'voice', 'stickers', 'about'];
+    return keys.map(function (k) {
+      return '<button class="set-card" data-section="' + k + '">' +
+        '<div class="set-card-main">' +
+        '<div class="set-card-title">' + SECTION_TITLES[k] + '</div>' +
+        '<div class="set-card-sub">' + esc(sectionSummary(k)) + '</div>' +
+        '</div><div class="set-card-arrow">›</div></button>';
+    }).join('');
+  }
+
+  /** 把已渲染的区块收进隐藏容器，页面上只放摘要卡 */
+  function groupSettingsSections() {
+    var body = $('#settings-body');
+    if (!body) return;
+    var all = document.createElement('div');
+    all.className = 'set-all';
+    while (body.firstChild) all.appendChild(body.firstChild);
+    body.appendChild(all);
+
+    var cards = document.createElement('div');
+    cards.id = 'set-cards';
+    cards.innerHTML = buildSummaryCards();
+    body.insertBefore(cards, all);
+
+    var map = {};
+    var cur = null;
+    Array.prototype.slice.call(all.children).forEach(function (node) {
+      if (node.classList.contains('section-title')) {
+        cur = node.textContent.trim();
+        map[cur] = map[cur] || [];
+        map[cur].push(node);
+      } else if (cur) {
+        map[cur].push(node);
+      } else {
+        body.insertBefore(node, cards); // hero 等，留在页面上
+      }
+    });
+    state.setSections = map;
+
+    Array.prototype.forEach.call(cards.querySelectorAll('[data-section]'), function (el) {
+      el.addEventListener('click', function () { openSection(el.dataset.section); });
+    });
+  }
+
+  /** 取出某个分区当前的所有节点 */
+  function collectSection(key) {
+    var names = SECTION_GROUPS[key] || [];
+    var nodes = [];
+    var map = state.setSections || {};
+    names.forEach(function (n) {
+      (map[n] || []).forEach(function (x) { nodes.push(x); });
+    });
+    return nodes;
+  }
+
+  /** 打开某个分区的控制面板（把已绑好事件的节点搬进 sheet） */
+  function openSection(key) {
+    var nodes = collectSection(key);
+    if (!nodes.length) return;
+    var map = state.setSections || {};
+    var all = document.querySelector('#settings-body .set-all');
+    if (all) {
+      for (var k in map) {
+        if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+        map[k].forEach(function (n) {
+          if (n.parentNode !== all) all.appendChild(n);
+        });
+      }
+    }
+    openSheet('<div class="row between"><div class="section-title" style="margin:0">' +
+      (SECTION_TITLES[key] || '设置') + '</div>' +
+      '<button class="btn small" id="sec-done">完成</button></div>');
+    var sheetBody = $('#sheet-body');
+    nodes.forEach(function (n) { sheetBody.appendChild(n); });
+    $('#sec-done').addEventListener('click', closeSheet);
+    state.sheetSection = key;
+  }
+
+  /** 设置项变了：重建设置页，并把当前分区面板重新铺一遍，否则面板内容不会更新 */
+  function refreshSection() {
+    var key = state.sheetSection;
+    renderSettings();
+    if (key) openSection(key);
+  }
   function renderSettings() {
     refreshTts();
     var body = $('#settings-body');
@@ -1383,8 +1803,7 @@
       (state.meta.avatars.user ? '<button class="btn small ghost" data-act="avatar-reset" data-role="user">默认</button>' : '') +
       '</div>' +
       '<div class="avatar-row">' +
-      '<div class="avatar-big ai" id="av-ai-preview"' + (state.meta.avatars.assistant ? ' style="background-image:url(' + state.meta.avatars.assistant + ')"' : '') + '>' +
-      (state.meta.avatars.assistant ? '' : 'AI') + '</div>' +
+      '<div class="avatar-big ai" style="background-image:url(' + (state.meta.avatars.assistant || 'avatar-ai.webp') + ')"></div>' +
       '<div class="s-label" style="flex:1">AI 头像</div>' +
       '<button class="btn small" data-act="avatar" data-role="assistant">更换</button>' +
       (state.meta.avatars.assistant ? '<button class="btn small ghost" data-act="avatar-reset" data-role="assistant">默认</button>' : '') +
@@ -1431,12 +1850,15 @@
       '<button class="chip' + (bb.assistant === 'classic' ? ' active' : '') + '" data-act="bubble" data-role="assistant" data-style="classic">深色</button>' +
       '<button class="chip' + (bb.assistant !== 'classic' ? ' active' : '') + '" data-act="bubble" data-role="assistant" data-style="cream">奶白</button>' +
       '</div></div>' +
+      '<div class="slider-row" style="margin-top:10px"><label>气泡透明度</label>' +
+      '<input type="range" id="set-bubble-alpha" min="0.35" max="1" step="0.05" value="' + (typeof state.meta.bubbleAlpha === 'number' ? state.meta.bubbleAlpha : 1) + '">' +
+      '<div class="val" id="set-bubble-alpha-v">' + Math.round((typeof state.meta.bubbleAlpha === 'number' ? state.meta.bubbleAlpha : 1) * 100) + '%</div></div>' +
       '</div>';
     html += '<div class="section-title">聊天背景</div>' +
       '<div class="card">' +
       '<div class="chip-row" style="margin-bottom:10px">' +
-      ['none', 'space', 'dusk', 'mist', 'sand', 'fox'].map(function (k) {
-        var names = { none: '无', space: '深空', dusk: '暮色', mist: '青灰', sand: '暖沙', fox: '语见' };
+      ['none', 'space', 'dusk', 'mist', 'sand', 'fox', 'pink', 'starry', 'moon'].map(function (k) {
+        var names = { none: '无', space: '深空', dusk: '暮色', mist: '青灰', sand: '暖沙', fox: '语见', pink: '粉霞漫天', starry: '纸灯夜航', moon: '月照重楼' };
         var active = (state.meta.chatBackground.preset || 'none') === k && !state.meta.chatBackground.image;
         return '<button class="chip' + (active ? ' active' : '') + '" data-act="bg-preset" data-key="' + k + '">' + names[k] + '</button>';
       }).join('') +
@@ -1445,12 +1867,14 @@
       '<button class="btn small" data-act="bg-image">选择图片</button>' +
       (state.meta.chatBackground.image ? '<button class="btn small ghost" data-act="bg-clear">清除图片</button>' : '') +
       '</div>' +
-      (state.meta.chatBackground.image
-        ? '<div class="slider-row" style="margin-top:12px"><label>图片遮罩</label>' +
-          '<input type="range" id="bg-dim" min="0" max="0.85" step="0.05" value="' + (typeof state.meta.chatBackground.dim === 'number' ? state.meta.chatBackground.dim : 0.45) + '">' +
-          '<div class="val" id="bg-dim-v">' + Math.round((typeof state.meta.chatBackground.dim === 'number' ? state.meta.chatBackground.dim : 0.45) * 100) + '%</div></div>'
-        : '') +
-      '<div class="muted" style="margin-top:9px">图片会按长边 1080 压缩后存在本机；遮罩越高文字越清楚。</div>' +
+      '<div class="slider-row" style="margin-top:12px"><label>特效密度</label>' +
+      '<input type="range" id="bg-particles" min="0" max="1" step="0.1" value="' + (typeof state.meta.particleDensity === 'number' ? state.meta.particleDensity : 0.6) + '">' +
+      '<div class="val" id="bg-particles-v">' + Math.round((typeof state.meta.particleDensity === 'number' ? state.meta.particleDensity : 0.6) * 100) + '%</div></div>' +
+      '<div class="slider-row" style="margin-top:12px"><label>亮度</label>' +
+      '<input type="range" id="bg-dim" min="0" max="0.9" step="0.05" value="' + (typeof state.meta.chatBackground.dim === 'number' ? state.meta.chatBackground.dim : 0.45) + '">' +
+      '<div class="val" id="bg-dim-v">' + Math.round((typeof state.meta.chatBackground.dim === 'number' ? state.meta.chatBackground.dim : 0.45) * 100) + '%</div></div>' +
+      '<div class="muted" style="margin-top:9px">亮度是叠在背景图上的暗色层：0% 显示原图，越高越暗、文字越清楚。图片会按长边 1080 压缩后存在本机。</div>' +
+      '<button class="btn small ghost block" style="margin-top:14px" data-act="reset-appearance">重置外观设置</button>' +
       '</div>';
     html += '<div class="section-title">数据</div>' +
       '<div class="card">' +
@@ -1490,6 +1914,10 @@
       '<div class="switch-row" style="padding:4px 2px"><div><div class="s-label">自动表情</div>' +
       '<div class="s-desc">' + (stickerCats.length ? '已导入 ' + stickerCats.length + ' 个分类' : '还没有导入分类，先点下面的「导入文件夹」') + '</div></div>' +
       '<div class="switch' + (state.cur && state.cur.stickerAuto ? ' on' : '') + '" id="set-sticker"></div></div>' +
+      '<div class="slider-row" style="margin-top:6px"><label>主动表情</label>' +
+      '<input type="range" id="set-sticker-global" min="0" max="100" step="10" value="' + (typeof state.meta.stickerGlobal === 'number' ? state.meta.stickerGlobal : 0) + '">' +
+      '<div class="val" id="set-sticker-global-v">' + (typeof state.meta.stickerGlobal === 'number' ? state.meta.stickerGlobal : 0) + '%</div></div>' +
+      '<div class="hint" style="margin-top:-2px">0 = 由模型决定；100 = 每轮回复都补一张「默认」分类的表情（模型没情绪时兜底）</div>' +
       '<div class="row wrap" style="gap:6px;margin-top:8px">' +
       '<button class="btn small" data-act="sticker-manage">管理表情包</button>' +
       '<button class="btn small" data-act="sticker-import">导入文件夹</button>' +
@@ -1501,11 +1929,27 @@
       '<button class="btn small" data-act="copy-diag">复制日志</button>' +
       '</div>';
 
-    html += '<div class="section-title">关于</div>' +
-      '<div class="card"><div class="muted">语见 3.8 · 本地 WebView 界面 + 原生 HTTP 层。<br>' +
+    var u = state.meta.usage || { p: 0, c: 0, rounds: 0 };
+    var bal = state.balance && state.balance.ok
+      ? ('余额 ' + (state.balance.currency === 'USD' ? '$' : '¥') + Number(state.balance.balance).toFixed(2))
+      : '未查询';
+    html += '<div class="section-title">额度</div>' +
+      '<div class="card">' +
+      '<div class="switch-row" style="padding:2px"><div><div class="s-label">额度桌宠</div>' +
+      '<div class="s-desc">聊天页右下角显示余额或本轮 token</div></div>' +
+      '<div class="switch' + (state.meta.showQuota ? ' on' : '') + '" id="set-quota"></div></div>' +
+      '<div class="muted" style="margin-top:10px">' + esc(bal) +
+      ' · 累计 ' + fmtTok((u.p || 0) + (u.c || 0)) + ' tokens / ' + (u.rounds || 0) + ' 轮</div>' +
+      '<button class="btn small block" data-act="fetch-balance" style="margin-top:10px">立即查询余额</button>' +
+      '<div class="muted" style="margin-top:9px">余额接口只支持 DeepSeek、OpenRouter 和 one-api 系中转；' +
+      '其他服务商查询会提示不支持（token 统计不受影响）。</div>' +
+      '</div>' +
+      '<div class="section-title">关于</div>' +
+      '<div class="card"><div class="muted">语见 3.30 · 本地 WebView 界面 + 原生 HTTP 层。<br>' +
       '客户端不做内容审查、不注入审查提示词、不改写你的消息；模型与服务端自身的策略不受本应用控制。</div></div>';
 
     body.innerHTML = html;
+    groupSettingsSections();
 
     var autoReadEl = $('#set-autoread');
     if (autoReadEl) {
@@ -1546,6 +1990,60 @@
           Native.ttsConfigure(JSON.stringify({ voice: state.tts.voice, rate: state.tts.rate, preferApi: !!state.tts.preferApi }));
           Native.ttsSpeak('你好，这是语音测试。今天天气不错。');
         } catch (e) { toast('朗读失败：' + e.message); }
+      });
+    }
+    var gEl = $('#set-sticker-global');
+    if (gEl) {
+      gEl.addEventListener('input', function () {
+        state.meta.stickerGlobal = Number(this.value);
+        var v = $('#set-sticker-global-v');
+        if (v) v.textContent = this.value + '%';
+        saveMeta();
+      });
+    }
+    var alphaEl = $('#set-bubble-alpha');
+    if (alphaEl) {
+      alphaEl.addEventListener('input', function () {
+        state.meta.bubbleAlpha = Number(this.value);
+        var v = $('#set-bubble-alpha-v');
+        if (v) v.textContent = Math.round(state.meta.bubbleAlpha * 100) + '%';
+        applyBubbles();
+        saveMeta();
+      });
+    }
+    var partEl = $('#bg-particles');
+    if (partEl) {
+      partEl.addEventListener('input', function () {
+        state.meta.particleDensity = Number(this.value);
+        var v = $('#bg-particles-v');
+        if (v) v.textContent = Math.round(state.meta.particleDensity * 100) + '%';
+        removeParticles();
+        var bgp = state.meta.chatBackground || {};
+        if (!bgp.image && IMAGE_BG[bgp.preset]) ensureParticles(IMAGE_BG[bgp.preset].kind);
+        saveMeta();
+      });
+    }
+    var dimEl2 = $('#bg-dim');
+    if (dimEl2) {
+      dimEl2.addEventListener('input', function () {
+        state.meta.chatBackground.dim = Number(this.value);
+        var v = $('#bg-dim-v');
+        if (v) v.textContent = Math.round(state.meta.chatBackground.dim * 100) + '%';
+        applyBackground();
+        saveMeta();
+      });
+    }
+    var quotaEl = $('#set-quota');
+    if (quotaEl) {
+      quotaEl.addEventListener('click', function () {
+        state.meta.showQuota = !state.meta.showQuota;
+        this.classList.toggle('on', state.meta.showQuota);
+        saveMeta();
+        renderPet();
+        if (state.meta.showQuota) {
+          setPetBubble('查余额中…', 4000);
+          try { Native.fetchBalance((state.cur && state.cur.providerId) || ''); } catch (e) { }
+        }
       });
     }
     var setSticker = $('#set-sticker');
@@ -1990,12 +2488,25 @@
       '<div class="switch-row" style="margin-top:6px"><div><div class="s-label">自动表情</div>' +
       '<div class="s-desc">打开后模型才能在对话里发表情</div></div>' +
       '<div class="switch' + (state.cur && state.cur.stickerAuto ? ' on' : '') + '" id="sk-auto"></div></div>' +
+      '<div class="slider-row" style="margin-top:4px"><label>主动表情</label>' +
+      '<input type="range" id="sk-global" min="0" max="100" step="10" value="' + (typeof state.meta.stickerGlobal === 'number' ? state.meta.stickerGlobal : 0) + '">' +
+      '<div class="val" id="sk-global-v">' + (typeof state.meta.stickerGlobal === 'number' ? state.meta.stickerGlobal : 0) + '%</div></div>' +
+      '<div class="hint" style="margin-top:-2px">0 = 由模型决定；100 = 每轮都补一张「默认」分类的表情</div>' +
       '<div class="hint" style="line-height:1.6">选一个文件夹，里面每个子文件夹是一种情绪（开心/悲伤/傲娇…），图片和 GIF 会被<strong>复制进应用</strong>，之后删原文件也不影响。只有这里列出的分类，模型才可能发。</div>' +
       rows
     );
 
     $('#sk-done').addEventListener('click', closeSheet);
     $('#sk-auto').addEventListener('click', function () { toggleStickerAuto(this); });
+    var skG = $('#sk-global');
+    if (skG) {
+      skG.addEventListener('input', function () {
+        state.meta.stickerGlobal = Number(this.value);
+        var v = $('#sk-global-v');
+        if (v) v.textContent = this.value + '%';
+        saveMeta();
+      });
+    }
     $('#sk-import').addEventListener('click', function () { Native.importStickers(); });
     $('#sk-refresh').addEventListener('click', function () {
       toast('正在刷新…');
@@ -2079,24 +2590,93 @@
     });
   }
 
+  /** 把模型给的分类名匹配到实际存在的分类：精确 → 包含 → 共享字符 */
+  function matchCategory(name, cats) {
+    var norm = function (x) {
+      return String(x || '').replace(/[\s"'"'「」『』（）()\[\]【】*`~～·、,，.。!！?？:：;；-]/g, '');
+    };
+    var want = norm(name);
+    if (!want) return null;
+    var best = null, bestScore = 0;
+    for (var i = 0; i < cats.length; i++) {
+      var have = norm(cats[i].name);
+      if (!have) continue;
+      var score = 0;
+      if (have === want) score = 100;
+      else if (have.indexOf(want) >= 0 || want.indexOf(have) >= 0) score = 60 + Math.min(20, Math.min(have.length, want.length));
+      else {
+        var shared = 0;
+        for (var k = 0; k < want.length; k++) if (have.indexOf(want.charAt(k)) >= 0) shared++;
+        if (shared > 0) score = 10 + shared * 5;
+      }
+      if (score > bestScore) { bestScore = score; best = cats[i]; }
+    }
+    // 阈值：至少共享一个字符，避免乱配
+    return bestScore >= 15 ? best : null;
+  }
+
+  /** 全局概率兜底：模型没发表情时，按总开关概率补一张「默认」分类的图 */
+  function maybeGlobalSticker(m) {
+    var s = state.cur;
+    if (!s || !m) return false;
+    var g = typeof state.meta.stickerGlobal === 'number' ? state.meta.stickerGlobal : 0;
+    if (g <= 0) return false;                                  // 未开启主动表情
+    if (m.error) { dbg('sticker', '兜底跳过：本轮报错'); return false; }
+    if (m.stickerSent || m.kind === 'sticker') { dbg('sticker', '兜底跳过：本轮已有表情'); return false; }
+    if ((m.content || '').trim().length < 6) { dbg('sticker', '兜底跳过：回复太短'); return false; }
+    if (Math.random() * 100 >= g) { dbg('sticker', '兜底跳过：概率未中(' + g + '%)'); return false; }
+
+    var cats = (state.stickers && state.stickers.categories) || [];
+    var defFolder = null;
+    var list = [];
+    for (var i = 0; i < cats.length; i++) {
+      list.push(cats[i].name + '(' + cats[i].count + ')');
+      if (cats[i].count > 0 && String(cats[i].name).trim() === '默认') defFolder = cats[i];
+    }
+    if (defFolder) {
+      try { Native.pickSticker(defFolder.name); } catch (e) { return false; }
+      m.stickerSent = true;
+      dbg('sticker', '全局兜底：发「默认」');
+      return true;
+    }
+
+    // 兼容旧的本地槽位分类
+    ensurePacks();
+    var defPack = findPackByName('默认');
+    if (defPack && defPack.stickers && defPack.stickers.length) {
+      s.messages.push({
+        id: uid(), role: 'assistant', kind: 'sticker',
+        sticker: defPack.stickers[Math.floor(Math.random() * defPack.stickers.length)],
+        ts: now(), model: s.model
+      });
+      m.stickerSent = true;
+      dbg('sticker', '全局兜底：发「默认」（本地槽位）');
+      persist(true);
+      return true;
+    }
+
+    dbg('sticker', '兜底跳过：没有「默认」分类，现有 ' + (list.length ? list.join('、') : '(空)'));
+    return false;
+  }
   /** 按分类发一张：文件夹模式走原生随机取图，旧槽位模式直接用 base64。 */
   function sendStickerByCategory(cat) {
     var s = state.cur;
     if (!s) return false;
-    var name = String(cat || '').trim();
-    if (!name) return false;
+    var raw = String(cat || '').trim();
+    if (!raw) return false;
 
     var folderCats = (state.stickers && state.stickers.categories) || [];
-    for (var i = 0; i < folderCats.length; i++) {
-      if (folderCats[i].name === name) {
-        var p = typeof state.meta.stickerProb[name] === 'number' ? state.meta.stickerProb[name] : 100;
-        if (Math.random() * 100 >= p) return false;
-        try { Native.pickSticker(name); } catch (e) { return false; }
-        return true;
-      }
+    var hit = matchCategory(raw, folderCats);
+    if (hit) {
+      var name = hit.name;
+      if (name !== raw) dbg('sticker', '分类「' + raw + '」匹配到「' + name + '」');
+      var p = typeof state.meta.stickerProb[name] === 'number' ? state.meta.stickerProb[name] : 100;
+      if (Math.random() * 100 >= p) return false;
+      try { Native.pickSticker(name); } catch (e) { return false; }
+      return true;
     }
 
-    var pack = findPackByName(name);
+    var pack = findPackByName(raw);
     if (pack && pack.stickers && pack.stickers.length) {
       var prob = typeof pack.prob === 'number' ? pack.prob : 100;
       if (Math.random() * 100 >= prob) return false;
@@ -2425,9 +3005,25 @@
 
         if (!m.content && !m.error) m.error = '模型没有返回内容';
 
+        if (o.usage) {
+          var u = state.meta.usage || { p: 0, c: 0, rounds: 0 };
+          u.p += (o.usage.p || 0);
+          u.c += (o.usage.c || 0);
+          u.rounds = (u.rounds || 0) + 1;
+          state.meta.usage = u;
+          m.usage = { p: o.usage.p || 0, c: o.usage.c || 0 };
+          saveMeta();
+          renderPet();
+          if (state.meta.showQuota) {
+            setPetBubble('本轮 ' + fmtTok(m.usage.p + m.usage.c) +
+              '（入 ' + fmtTok(m.usage.p) + ' / 出 ' + fmtTok(m.usage.c) + '）', 3000);
+          }
+        }
+
         dbg('done', {
           id: o.id, tools: (o.tools || []).length, len: (m.content || '').length,
-          err: m.error || '', web: !!m.web
+          err: m.error || '', web: !!m.web,
+          tok: o.usage ? (o.usage.p + '+' + o.usage.c) : ''
         });
 
         if (!m.error && state.cur && state.cur.autoRead && (m.content || '').trim()) {
@@ -2445,7 +3041,11 @@
         if (noSearch) m.noSearch = true;
 
         var stuck = false;
-        if (!m.error) stuck = maybeSendSticker(m);
+        if (!m.error) {
+          stuck = maybeSendSticker(m);
+          if (stuck) m.stickerSent = true;
+          if (!stuck) stuck = maybeGlobalSticker(m);
+        }
         if (stuck || noSearch) renderMessages(); else updateMessageNode(m);
       }
       renderComposer();
@@ -2577,6 +3177,25 @@
       else if (state.open.settings) renderSettings();
     },
 
+    onBalance: function (raw) {
+      var o = JSON.parse(raw);
+      state.balance = o;
+      dbg('balance', o.ok ? (o.source + ' ' + o.currency + ' ' + o.balance) : ('失败 ' + (o.error || '')));
+      if (!o.ok) toast(o.error || '这个服务商查不到余额');
+      renderPet();
+      if (state.meta.showQuota) {
+        if (o.ok) {
+          var cur = o.currency === 'USD' ? '$' : '¥';
+          setPetBubble('余额 ' + cur + Number(o.balance).toFixed(2), 6000);
+        } else {
+          var msg = state.meta.usage && (state.meta.usage.p + state.meta.usage.c) > 0
+            ? ('累计 ' + fmtTok(state.meta.usage.p + state.meta.usage.c))
+            : '查不到余额';
+          setPetBubble(msg, 3000);
+        }
+      }
+    },
+
     onTts: function (raw) {
       var o = JSON.parse(raw);
       dbg('tts', o.state + (o.detail ? ':' + o.detail : ''));
@@ -2699,7 +3318,7 @@
     $('#btn-export-all').addEventListener('click', exportAll);
     $('#btn-import').addEventListener('click', function () { Native.importFile(); });
 
-    $('#settings-body').addEventListener('click', function (e) {
+    function settingsActHandler(e) {
       var btn = e.target.closest('[data-act]');
       if (!btn) return;
       var act = btn.dataset.act;
@@ -2742,7 +3361,7 @@
       if (act === 'avatar-reset') {
         state.meta.avatars[btn.dataset.role] = '';
         saveMeta();
-        renderSettings();
+        refreshSection();
         renderMessages();
         return;
       }
@@ -2758,7 +3377,7 @@
         state.meta.bubble[role] = btn.dataset.style;
         saveMeta();
         applyBubbles();
-        renderSettings();
+        refreshSection();
         renderMessages();
         return;
       }      if (act === 'sticker-manage') { closeSettings(); openStickerSheet(); return; }
@@ -2769,10 +3388,43 @@
         state.meta.chatBackground.image = '';
         saveMeta();
         applyBackground();
-        renderSettings();
+        refreshSection();
         return;
       }
       if (act === 'bg-image') { Native.pickBackground(); return; }
+      if (act === 'reset-appearance') {
+        openSheet(
+          '<div style="text-align:center;padding:6px 0 2px">' +
+          '<img src="face-cry.webp" alt="" style="width:78px;height:108px;object-fit:contain;filter:drop-shadow(0 6px 14px rgba(0,0,0,.45))">' +
+          '<div class="section-title" style="margin:10px 0 6px;justify-content:center">真的要重置吗？</div>' +
+          '<div class="muted" style="line-height:1.6">头像、气泡样式、气泡透明度、背景、特效密度<br>都会恢复成默认值，聊天记录不受影响。</div>' +
+          '</div>' +
+          '<div class="row" style="gap:8px;margin-top:16px">' +
+          '<button class="btn" style="flex:1" id="rst-cancel">再想想</button>' +
+          '<button class="btn danger" style="flex:1" id="rst-ok">重置</button></div>');
+        $('#rst-cancel').addEventListener('click', closeSheet);
+        $('#rst-ok').addEventListener('click', function () {
+          state.meta.avatars = { user: '', assistant: '' };
+          state.meta.bubble = { user: 'classic', assistant: 'cream' };
+          state.meta.bubbleAlpha = 1;
+          state.meta.chatBackground = { preset: 'none', image: '', dim: 0.45 };
+          state.meta.particleDensity = 0.6;
+          saveMeta();
+          applyBubbles();
+          applyBackground();
+          closeSheet();
+          refreshSection();
+          renderMessages();
+          renderHeader();
+          toast('外观已恢复默认');
+        });
+        return;
+      }
+      if (act === 'fetch-balance') {
+        toast('正在查询余额…');
+        Native.fetchBalance((state.cur && state.cur.providerId) || '');
+        return;
+      }
       if (act === 'copy-diag') {
         Native.copy(DEBUG.join('\n') || '（还没有记录）');
         toast('已复制日志');
@@ -2783,7 +3435,7 @@
         state.meta.chatBackground.preset = 'none';
         saveMeta();
         applyBackground();
-        renderSettings();
+        refreshSection();
         return;
       }      if (act === 'save-search') {
         var sk = $('#sk-key').value.trim();
@@ -2794,6 +3446,13 @@
         renderSettings();
         return;
       }
+    }
+
+    $('#settings-body').addEventListener('click', settingsActHandler);
+    // 分区面板里的按钮也走同一套逻辑（节点被搬进 sheet 后，事件不再冒泡到 settings-body）
+    $('#sheet-body').addEventListener('click', function (e) {
+      if (!state.sheetSection) return;
+      settingsActHandler(e);
     });
 
     $('#messages').addEventListener('click', function (e) {
@@ -2859,6 +3518,17 @@
         }
         if (meta.packId) state.packId = meta.packId;
         state.hasSearchKey = !!meta.hasSearchKey;
+
+        // 这几项以前没被读回来，导致重启后设置重置
+        if (meta.bubble && typeof meta.bubble === 'object') state.meta.bubble = meta.bubble;
+        if (meta.stickerProb && typeof meta.stickerProb === 'object') state.meta.stickerProb = meta.stickerProb;
+        if (typeof meta.bubbleAlpha === 'number') state.meta.bubbleAlpha = meta.bubbleAlpha;
+        if (typeof meta.stickerGlobal === 'number') state.meta.stickerGlobal = meta.stickerGlobal;
+        if (typeof meta.particleDensity === 'number') state.meta.particleDensity = meta.particleDensity;
+        if (typeof meta.showQuota === 'boolean') state.meta.showQuota = meta.showQuota;
+        if (meta.petPos && typeof meta.petPos === 'object') state.meta.petPos = meta.petPos;
+        if (meta.usage && typeof meta.usage === 'object') state.meta.usage = meta.usage;
+        if (meta.tts && typeof meta.tts === 'object') state.meta.tts = meta.tts;
       }
     } catch (e) { }
     ensurePacks();
@@ -2923,6 +3593,7 @@
 
     applyBubbles();
     bind();
+    renderPet();
     applyBackground();
     renderAll();
 
@@ -2934,6 +3605,15 @@
 
     if (!state.providers.length) openSettings();
   }
+
+  window.addEventListener('resize', function () {
+    try {
+      if (state.meta && state.meta.petPos) {
+        state.meta.petPos = clampPet(state.meta.petPos.x, state.meta.petPos.y);
+        renderPet();
+      }
+    } catch (e) { }
+  });
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

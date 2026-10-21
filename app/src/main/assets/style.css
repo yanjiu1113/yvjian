@@ -140,10 +140,11 @@ input, textarea { font-family: inherit; }
 
 .msg .bubble {
   position: relative;
+  isolation: isolate;
   max-width: 100%;
   padding: 10px 14px;
   border-radius: 18px 18px 5px 18px;
-  background: linear-gradient(135deg, #d2564e 0%, #c04640 52%, #a83a37 100%);
+  background: none;
   color: #fff7f5;
   line-height: 1.62;
   white-space: pre-wrap;
@@ -1357,3 +1358,237 @@ body.bubble-user-cream .msg.user .bubble::after {
 }
 
 #messages.bg-fox > * { position: relative; z-index: 1; }
+/* 报错块里的文字（与生气表情并排） */
+.err-text { flex: 1; min-width: 0; line-height: 1.5; }
+/* ---------- 设置页摘要卡片 ---------- */
+#set-cards { display: flex; flex-direction: column; gap: 8px; }
+
+.set-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 14px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .02));
+  border: 1px solid rgba(255, 255, 255, .07);
+  transition: background .12s, border-color .12s;
+}
+
+.set-card:active {
+  background: rgba(210, 86, 78, .12);
+  border-color: rgba(210, 86, 78, .3);
+}
+
+.set-card-main { flex: 1; min-width: 0; }
+
+.set-card-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: #e8ecf3;
+  letter-spacing: .02em;
+}
+
+.set-card-sub {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.set-card-arrow {
+  flex: 0 0 auto;
+  font-size: 20px;
+  line-height: 1;
+  color: rgba(255, 255, 255, .22);
+  padding-left: 2px;
+}
+
+.set-all { display: none; }
+/* ---------- 粉霞背景 ---------- */
+/* 背景图铺在 #messages 自己身上，用 background-attachment: fixed
+   这样只在自己的盒子内绘制，不会盖住下面的输入框 */
+#messages.bg-pink {
+  background-position: center, center;
+  background-size: cover, cover;
+  background-repeat: no-repeat, no-repeat;
+  background-attachment: fixed, fixed;
+}
+
+#messages.bg-pink > .msg { position: relative; z-index: 1; }
+
+/* 花瓣粒子层 */
+.petals {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: var(--composer-h, 0px);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.petals span {
+  position: absolute;
+  top: -8vh;
+  background: linear-gradient(135deg, #ffe1ea, #ff9ec1);
+  border-radius: 60% 0 60% 0;
+  display: block;
+  animation-name: petal-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+@keyframes petal-fall {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    opacity: 0;
+  }
+  8% { opacity: .9; }
+  92% { opacity: .9; }
+  100% {
+    transform: translate3d(var(--drift, 30px), 112vh, 0) rotate(320deg);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .petals { display: none; }
+}
+/* 气泡底色（可调透明度，文字不受影响） */
+.msg .bubble::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, #d2564e 0%, #c04640 52%, #a83a37 100%);
+  opacity: var(--bubble-alpha, 1);
+  z-index: -1;
+}
+
+/* AI 气泡底色也走伪元素，透明度和我的气泡统一 */
+.msg.assistant .body { background: transparent; }
+
+.msg.assistant .body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: #fff7f3;
+  opacity: var(--bubble-alpha, 1);
+  z-index: -1;
+}
+
+body.bubble-ai-classic .msg.assistant .body { background: transparent; }
+
+body.bubble-ai-classic .msg.assistant .body::before {
+  background: rgba(255, 255, 255, .034);
+}
+
+body.bubble-user-cream .msg.user .bubble { background: none; }
+
+body.bubble-user-cream .msg.user .bubble::before {
+  background: #fff7f3;
+}
+
+/* 微尘粒子（星空 / 月夜） */
+.motes {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: var(--composer-h, 0px);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.motes span {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, rgba(200, 220, 255, .65) 60%, rgba(160, 190, 255, 0) 100%);
+  display: block;
+  animation-name: mote-drift;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes mote-drift {
+  0% { transform: translate3d(0, 0, 0); opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { transform: translate3d(var(--dx, 20px), var(--dy, -100px), 0); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motes { display: none; }
+}
+
+
+/* ---------- 额度桌宠 ---------- */
+.pet {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 42px;
+  height: 42px;
+  z-index: 6;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s;
+  touch-action: none;
+  user-select: none;
+}
+
+.pet.show { opacity: 1; pointer-events: auto; }
+
+.pet.dragging { transform: scale(1.06); }
+
+.pet-face {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center 35%;
+  border: 1px solid rgba(210, 86, 78, .45);
+  background: #1a1f2a;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .4);
+  pointer-events: none;
+}
+
+.pet-bubble {
+  position: absolute;
+  right: calc(100% + 7px);
+  bottom: 4px;
+  max-width: 160px;
+  padding: 7px 10px;
+  border-radius: 12px 12px 4px 12px;
+  background: rgba(255, 247, 243, .96);
+  color: #4a2620;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+  opacity: 0;
+  transform: translateY(4px) scale(.96);
+  transition: opacity .16s, transform .16s;
+  pointer-events: none;
+}
+
+.pet.bubble-on .pet-bubble {
+  opacity: 1;
+  transform: none;
+}
+
+/* 靠近左边缘时气泡翻到右侧 */
+.pet.flip .pet-bubble {
+  right: auto;
+  left: calc(100% + 7px);
+  border-radius: 12px 12px 12px 4px;
+}

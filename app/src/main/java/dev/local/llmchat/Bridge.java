@@ -50,6 +50,10 @@ public class Bridge {
 
     private volatile Http.Job job;
     private volatile boolean streaming;
+
+    // 本轮 token 用量（模型带 usage 时才更新）
+    private volatile int turnPrompt = 0;
+    private volatile int turnCompletion = 0;
     private volatile String jobMsgId = "";
     private volatile boolean overlayOpen = false;
     private final StringBuilder bufC = new StringBuilder();
@@ -292,6 +296,11 @@ public class Bridge {
             double topP = p.optDouble("topP", -1);
             if (topP >= 0 && topP <= 1) body.put("top_p", topP);
 
+            JSONObject streamOpts = p.optJSONObject("streamOptions");
+            if (streamOpts != null && body.optBoolean("stream", false)) {
+                body.put("stream_options", streamOpts);
+            }
+
             JSONArray tools = p.optJSONArray("tools");
             if (tools != null && tools.length() > 0) {
                 body.put("tools", tools);
@@ -319,9 +328,11 @@ public class Bridge {
                 bufR.setLength(0);
             }
             streaming = true;
+            turnPrompt = 0;
+            turnCompletion = 0;
             main.post(ticker);
 
-            startStream(j, msgId, baseUrl, key, body, true);
+            startStream(j, msgId, baseUrl, key, body, 0);
         } catch (Exception e) {
             emitError("", "请求构造失败: " + e.getMessage());
         }
@@ -336,9 +347,12 @@ public class Bridge {
                 || m.indexOf("invalid") >= 0 || m.indexOf("unrecognized") >= 0;
     }
 
-    /** Starts one streaming request; retries once without tools when the endpoint rejects them. */
+    /**
+     * 逐级降级重试：0 原样 → 1 简化表情 schema（去掉 enum）→ 2 去掉表情工具 → 3 去掉全部工具。
+     * 有些模型（如 deepseek-v4-pro）在挂上带 enum 的工具后直接返回空内容。
+     */
     private void startStream(final Http.Job j, final String msgId, final String base, final String key,
-                             final JSONObject body, final boolean allowRetry) {
+                             final JSONObject body, final int stage) {
         final JSONArray[] acc = new JSONArray[1];
         pool.execute(() -> Http.streamChat(base, key, body, j, new Http.Listener() {
             @Override
@@ -352,6 +366,12 @@ public class Bridge {
             }
 
             @Override
+            public void onUsage(int prompt, int completion) {
+                turnPrompt = prompt;
+                turnCompletion = completion;
+            }
+
+            @Override
             public void onToolCalls(JSONArray calls) {
                 acc[0] = calls;
                 Log.d(TAG, "tool_calls n=" + (calls == null ? 0 : calls.length()));
@@ -359,22 +379,123 @@ public class Bridge {
 
             @Override
             public void onDone() {
+                // 注意：模型可能只吐了空格/换行，必须用 trim 判断，否则降级链永远不触发
+                String gotText = bufC.toString().trim();
+                emitDebug("tools", "请求结束 stage=" + stage
+                        + " content=" + bufC.length()
+                        + " reasoning=" + bufR.length()
+                        + " toolCalls=" + (acc[0] == null ? 0 : acc[0].length()));
+                boolean empty = gotText.isEmpty() && (acc[0] == null || acc[0].length() == 0);
+                if (empty) {
+                    emitDebug("tools", "本轮空回复：content=" + bufC.length()
+                            + " reasoning=" + bufR.length() + " stage=" + stage);
+                }
+                if (stage < 3 && body.has("tools") && empty) {
+                    JSONObject next = downgrade(body, stage + 1);
+                    if (next != null) {
+                        synchronized (bufC) {
+                            bufC.setLength(0);
+                        }
+                        synchronized (bufR) {
+                            bufR.setLength(0);
+                        }
+                        acc[0] = null;
+                        startStream(j, msgId, base, key, next, stage + 1);
+                        return;
+                    }
+                }
                 finish(j, msgId, true, null, acc[0]);
             }
 
             @Override
             public void onError(String message) {
-                if (allowRetry && body.has("tools") && looksLikeToolRejection(message)) {
-                    Log.w(TAG, "endpoint rejected tools, retrying without them: " + message);
-                    emitDebug("tools", "端点拒绝 tools，回落提示词协议: " + message);
-                    body.remove("tools");
-                    body.remove("tool_choice");
-                    startStream(j, msgId, base, key, body, false);
-                    return;
+                if (stage < 3 && body.has("tools") && looksLikeToolRejection(message)) {
+                    JSONObject next = downgrade(body, 3);
+                    if (next != null) {
+                        Log.w(TAG, "endpoint rejected tools, retrying without them: " + message);
+                        startStream(j, msgId, base, key, next, 3);
+                        return;
+                    }
                 }
                 finish(j, msgId, false, message, null);
             }
         }));
+    }
+
+    /** 构造下一级请求体（深拷贝后修改）。返回 null 表示无法再降级。 */
+    private JSONObject downgrade(JSONObject body, int target) {
+        try {
+            JSONObject next = new JSONObject(body.toString());
+            JSONArray tools = next.optJSONArray("tools");
+            if (tools == null) return null;
+
+            if (target >= 3) {
+                next.remove("tools");
+                next.remove("tool_choice");
+                next.remove("parallel_tool_calls");
+                emitDebug("tools", "去掉全部工具重试（模型对工具不兼容）");
+                return next;
+            }
+
+            if (target == 2) {
+                JSONArray kept = new JSONArray();
+                for (int i = 0; i < tools.length(); i++) {
+                    JSONObject t = tools.optJSONObject(i);
+                    JSONObject fn = t == null ? null : t.optJSONObject("function");
+                    String name = fn == null ? "" : fn.optString("name", "");
+                    if (!"send_sticker".equals(name)) kept.put(t);
+                }
+                if (kept.length() == 0) return downgrade(body, 3);
+                next.put("tools", kept);
+                emitDebug("tools", "去掉表情工具重试（该模型多工具不兼容）");
+                return next;
+            }
+
+            if (target == 1) {
+                boolean changed = false;
+                for (int i = 0; i < tools.length(); i++) {
+                    JSONObject t = tools.optJSONObject(i);
+                    JSONObject fn = t == null ? null : t.optJSONObject("function");
+                    if (fn == null || !"send_sticker".equals(fn.optString("name", ""))) continue;
+                    String cats = enumList(fn);
+                    JSONObject cat = new JSONObject();
+                    cat.put("type", "string");
+                    cat.put("description", cats.isEmpty()
+                            ? "情绪分类名" : ("情绪分类名，必须是以下之一：" + cats));
+                    JSONObject props = new JSONObject();
+                    props.put("category", cat);
+                    JSONObject params = new JSONObject();
+                    params.put("type", "object");
+                    params.put("properties", props);
+                    params.put("required", new JSONArray().put("category"));
+                    fn.put("parameters", params);
+                    changed = true;
+                }
+                if (!changed) return downgrade(body, 2);
+                emitDebug("tools", "简化表情工具参数（去掉 enum）重试");
+                return next;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private static String enumList(JSONObject fn) {
+        try {
+            JSONObject p = fn.optJSONObject("parameters");
+            JSONObject props = p == null ? null : p.optJSONObject("properties");
+            JSONObject cat = props == null ? null : props.optJSONObject("category");
+            JSONArray en = cat == null ? null : cat.optJSONArray("enum");
+            if (en == null) return "";
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < en.length(); i++) {
+                if (i > 0) sb.append("、");
+                sb.append(en.optString(i));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private void finish(Http.Job j, String msgId, boolean ok, String err, JSONArray toolCalls) {
@@ -388,9 +509,121 @@ public class Bridge {
             p.put("id", msgId);
             if (!ok && err != null) p.put("msg", err);
             if (ok && toolCalls != null && toolCalls.length() > 0) p.put("tools", toolCalls);
+            if (ok && (turnPrompt > 0 || turnCompletion > 0)) {
+                JSONObject u = new JSONObject();
+                u.put("p", turnPrompt);
+                u.put("c", turnCompletion);
+                p.put("usage", u);
+            }
         } catch (Exception ignored) {
         }
         emit(ok ? "onDone" : "onError", p);
+    }
+
+    /** 查询余额：按服务商地址依次尝试 DeepSeek / OpenRouter / one-api */
+    @JavascriptInterface
+    public void fetchBalance(String providerId) {
+        final String pid = providerId == null ? "" : providerId;
+        pool.execute(() -> {
+            JSONObject out = new JSONObject();
+            try {
+                String baseUrl = "";
+                JSONArray provs = store.providers();
+                for (int i = 0; i < provs.length(); i++) {
+                    JSONObject pr = provs.getJSONObject(i);
+                    if (pr.optString("id").equals(pid)) {
+                        baseUrl = pr.optString("baseUrl");
+                        break;
+                    }
+                }
+                String key = store.key(pid);
+                if (baseUrl.isEmpty() || key.isEmpty()) throw new Exception("服务商未配置");
+                out = probeBalance(baseUrl, key);
+            } catch (Exception e) {
+                try {
+                    out.put("ok", false);
+                    out.put("error", e.getMessage() == null ? e.toString() : e.getMessage());
+                } catch (Exception ignored) {
+                }
+            }
+            emit("onBalance", out);
+        });
+    }
+
+    private static String originOf(String baseUrl) {
+        try {
+            java.net.URL u = new java.net.URL(baseUrl);
+            return u.getProtocol() + "://" + u.getHost() + (u.getPort() > 0 ? ":" + u.getPort() : "");
+        } catch (Exception e) {
+            return baseUrl;
+        }
+    }
+
+    private JSONObject probeBalance(String baseUrl, String key) {
+        String origin = originOf(baseUrl);
+        String[] urls = new String[]{
+                origin + "/user/balance",
+                origin + "/api/v1/credits",
+                origin + "/dashboard/billing/subscription",
+                origin + "/v1/dashboard/billing/subscription"
+        };
+        Exception last = null;
+        for (String url : urls) {
+            try {
+                JSONObject o = Http.getJson(url, key);
+                if (o == null) continue;
+                JSONObject r = parseBalance(o);
+                if (r != null) return r;
+            } catch (Exception e) {
+                last = e;
+            }
+        }
+        JSONObject fail = new JSONObject();
+        try {
+            fail.put("ok", false);
+            fail.put("error", last == null ? "该服务商没有可用的余额接口" : ("查询失败：" + last.getMessage()));
+        } catch (Exception ignored) {
+        }
+        return fail;
+    }
+
+    private JSONObject parseBalance(JSONObject o) {
+        try {
+            JSONArray infos = o.optJSONArray("balance_infos");
+            if (infos != null && infos.length() > 0) {
+                JSONObject info = infos.getJSONObject(0);
+                JSONObject r = new JSONObject();
+                r.put("ok", true);
+                r.put("currency", info.optString("currency", "CNY"));
+                r.put("balance", info.optDouble("total_balance", 0));
+                r.put("source", "deepseek");
+                return r;
+            }
+            JSONObject data = o.optJSONObject("data");
+            if (data != null && data.has("total_credits")) {
+                double credits = data.optDouble("total_credits", 0);
+                double used = data.optDouble("total_usage", 0);
+                JSONObject r = new JSONObject();
+                r.put("ok", true);
+                r.put("currency", "USD");
+                r.put("balance", Math.round((credits - used) * 10000d) / 10000d);
+                r.put("total", credits);
+                r.put("used", used);
+                r.put("source", "openrouter");
+                return r;
+            }
+            if (o.has("hard_limit_usd") || o.has("system_hard_limit_usd")) {
+                double limit = o.optDouble("hard_limit_usd", o.optDouble("system_hard_limit_usd", 0));
+                JSONObject r = new JSONObject();
+                r.put("ok", true);
+                r.put("currency", "USD");
+                r.put("balance", Math.round(limit * 100d) / 100d);
+                r.put("source", "oneapi");
+                return r;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     @JavascriptInterface
