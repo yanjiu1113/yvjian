@@ -1220,3 +1220,29 @@ html, body {
 }
 
 .dev-warn b { color: #fff; }
+
+/* 设备级严重警告：已知缺陷，不建议使用 */
+.dev-danger {
+  margin: 10px 0;
+  padding: 14px 15px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 56, 56, .26), rgba(255, 56, 56, .12));
+  border: 1px solid rgba(255, 72, 72, .72);
+  box-shadow: 0 6px 22px -14px rgba(255, 40, 40, .9);
+  color: #ffe3e3;
+  font-size: 12.5px;
+  line-height: 1.68;
+}
+
+.dev-danger .dt {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: #fff;
+}
+
+.dev-danger b { color: #fff; }
+.dev-danger ul { margin: 6px 0 0; padding-left: 18px; }
+.dev-danger li { margin: 2px 0; }

@@ -175,7 +175,7 @@
     v.innerHTML =
       '<div class="dev-hint" style="margin:2px 0 12px">役次元产品</div>' +
       brandCard('cup', '榨精杯', '已支持', true) +
-      brandCard('ems', '电击器二代', 'EMS · 已支持', true) +
+      brandCard('ems', '电击器二代', '⚠ 有 BUG，不建议使用', true) +
       brandCard('ems1', '电击器一代', '暂未支持', false) +
       brandCard('cleaner', '灌肠机', '暂未支持', false);
     v.querySelectorAll('[data-b]').forEach(function (b) {
@@ -383,6 +383,16 @@
   function buildEmsView() {
     $('view-ems').innerHTML =
       '<div class="dev-status" id="ems-status">未连接</div>' +
+      '<div class="dev-danger">' +
+        '<span class="dt">⚠ 这台机器有 BUG，不建议使用</span>' +
+        '役次元电击器二代（荆棘 2.0）目前只保证 <b>A 口</b>。已知问题：' +
+        '<ul>' +
+          '<li>B 口与机身电极无法独立驱动，点了没反应</li>' +
+          '<li><b>点「停止输出」后 B 口可能还有一下放电</b>，强度不受控</li>' +
+          '<li>强度是两字节大端，上限被硬夹在 20</li>' +
+        '</ul>' +
+        '别贴在身上用。协议没补全之前，只建议拿它做连接测试。' +
+      '</div>' +
       '<div class="dev-row">' +
         '<button class="dev-btn" id="ems-scan">扫描</button>' +
         '<button class="dev-btn ghost" id="ems-scanall">扫描全部</button>' +

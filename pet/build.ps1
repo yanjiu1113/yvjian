@@ -1,4 +1,4 @@
-# Build 情趣版 APK with the standalone Android SDK (aapt2 + javac + d8 + apksigner).
+﻿# Build 情趣版 APK with the standalone Android SDK (aapt2 + javac + d8 + apksigner).
 # 工具链复用仓库根目录的 .toolchain（pet/ 是语见仓库的子目录）。
 # Usage: powershell -ExecutionPolicy Bypass -File build.ps1
 $ErrorActionPreference = "Stop"
@@ -12,8 +12,8 @@ $src = Join-Path $root "app\src\main"
 $out = Join-Path $root "build"
 $dist = Join-Path $root "dist"
 
-$versionCode = "79"
-$versionName = "0.79"
+$versionCode = "80"
+$versionName = "0.80"
 $apkName = "YujianPet-$versionName.apk"
 
 if (-not (Test-Path $androidJar)) { throw "Android SDK not found at $sdk" }
