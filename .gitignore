@@ -1,6 +1,8 @@
 # 构建工具链（JDK + Android SDK，约 700 MB，不入库）
 .toolchain/
 tools/_dl/
+.venv/
+pylibs/
 
 # 构建产物
 build/
@@ -11,6 +13,7 @@ build-log.txt
 
 # 打包输出（APK 用 Releases 发布，不进仓库）
 dist/
+archive/
 *.apk
 *.idsig
 
@@ -18,6 +21,10 @@ dist/
 keystore/
 *.jks
 *.keystore
+
+# 厂方协议文档（第三方版权，需要的自行准备）
+pet/tools/*.pdf
+pet/tools/*.apk
 
 # 测试临时文件
 test/out/

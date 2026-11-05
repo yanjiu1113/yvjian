@@ -81,11 +81,21 @@ Java 侧搜索解析器有独立用例：`test/java/dev/local/llmchat/SearchTest
 ```
 app/src/main/assets/    界面（HTML/CSS/JS）与素材
 app/src/main/java/      原生层：HTTP、SSE、搜索、TTS、Keystore、存储
+pet/                    情趣版（独立 APK，语见的插件）
 test/                   Node 行为测试 + Java 搜索解析测试
 tools/                  SDK 抓取脚本
 build.ps1               构建脚本
 语见-说明.txt             完整文档（定位 / 免责 / 用法 / 角色设定）
 ```
+
+## 情趣版（pet/）
+
+同一个仓库里的第二个 APK：把 BLE 成人设备接进对话，由模型按情绪决定输出。支持郊狼 3.0、役次元榨精杯、役次元电击器二代。
+
+- 独立包名 `dev.local.yujian.pet`，与语见分开安装
+- 三模式护栏（1–20 / 1–50 / 1–100），起始归零、强度硬上限、急停、看门狗都在原生层
+- 构建：`powershell -File pet\build.ps1`，工具链共用根目录 `.toolchain`
+- **18+**，细节与免责见 [pet/README.md](pet/README.md)
 
 ## 免责声明（摘要）
 

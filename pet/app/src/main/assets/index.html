@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>语见小狐</title>
+<link rel="stylesheet" href="pet.css">
+</head>
+<body>
+
+<div id="room">
+  <div class="sky"></div>
+  <div class="vignette"></div>
+
+  <div id="stage">
+    <div id="bubble" class="bubble">
+      <img id="face" class="face" src="art-face-normal.webp" alt="">
+      <div id="bubble-text" class="bubble-text"></div>
+    </div>
+
+    <div id="fox-wrap">
+      <canvas id="fox"></canvas>
+      <div id="shadow" class="shadow"></div>
+    </div>
+  </div>
+
+  <div id="fx"></div>
+</div>
+
+<script src="pet.js"></script>
+<script src="sock.js"></script>
+<script src="sched.js"></script>
+<script src="game.js"></script>
+<script src="dev.js"></script>
+</body>
+</html>
