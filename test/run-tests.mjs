@@ -744,5 +744,17 @@ GE.t.state.cur.messages = [];
 GE.t.sendCore("随便", []);
 GE.sandbox.__bridge.onDone(JSON.stringify({ id: GE.calls.chat[0].msgId, tools: [], err: "出错了" }));
 check("no sticker on error turn", GE.calls.stickers.length === 0, JSON.stringify(GE.calls.stickers));
+// 降级重试前，前端应清空已收到的半截内容（避免重复显示）
+const RS = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });
+RS.t.state.cur.messages = [];
+RS.t.sendCore("讲个故事", []);
+const rid = RS.calls.chat[0].msgId;
+RS.sandbox.__bridge.onChunk(JSON.stringify({ id: rid, c: "从前有座山", r: "先想想要怎么开头" }));
+const rmsg = RS.t.state.cur.messages.filter((x) => x.id === rid)[0];
+check("chunk accumulates content", rmsg.content === "从前有座山", rmsg.content);
+check("chunk accumulates reasoning", rmsg.reasoning === "先想想要怎么开头", rmsg.reasoning);
+RS.sandbox.__bridge.onReset(JSON.stringify({ id: rid }));
+check("reset clears content", rmsg.content === "", rmsg.content);
+check("reset clears reasoning", rmsg.reasoning === "", rmsg.reasoning);
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

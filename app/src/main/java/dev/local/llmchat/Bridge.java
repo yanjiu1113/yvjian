@@ -385,7 +385,11 @@ public class Bridge {
                         + " content=" + bufC.length()
                         + " reasoning=" + bufR.length()
                         + " toolCalls=" + (acc[0] == null ? 0 : acc[0].length()));
-                boolean empty = gotText.isEmpty() && (acc[0] == null || acc[0].length() == 0);
+                // 思考内容也算有输出：否则推理模型（只有 reasoning_content、content 为空）
+                // 会触发降级链，导致同一轮思考 2-3 遍
+                boolean empty = gotText.isEmpty()
+                        && bufR.toString().trim().isEmpty()
+                        && (acc[0] == null || acc[0].length() == 0);
                 if (empty) {
                     emitDebug("tools", "本轮空回复：content=" + bufC.length()
                             + " reasoning=" + bufR.length() + " stage=" + stage);
@@ -400,6 +404,7 @@ public class Bridge {
                             bufR.setLength(0);
                         }
                         acc[0] = null;
+                        emitReset(msgId);
                         startStream(j, msgId, base, key, next, stage + 1);
                         return;
                     }
@@ -413,6 +418,7 @@ public class Bridge {
                     JSONObject next = downgrade(body, 3);
                     if (next != null) {
                         Log.w(TAG, "endpoint rejected tools, retrying without them: " + message);
+                        emitReset(msgId);
                         startStream(j, msgId, base, key, next, 3);
                         return;
                     }
@@ -496,6 +502,16 @@ public class Bridge {
         } catch (Exception e) {
             return "";
         }
+    }
+
+    /** 通知前端丢弃该消息已收到的一半内容（降级重试前调用） */
+    private void emitReset(String msgId) {
+        JSONObject p = new JSONObject();
+        try {
+            p.put("id", msgId);
+        } catch (Exception ignored) {
+        }
+        emit("onReset", p);
     }
 
     private void finish(Http.Job j, String msgId, boolean ok, String err, JSONArray toolCalls) {

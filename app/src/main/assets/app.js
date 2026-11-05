@@ -271,6 +271,7 @@
       stream: true,
       webSearch: false,
       stickerAuto: false,
+      petLink: false,
       autoRead: false,
       messages: []
     };
@@ -361,6 +362,8 @@
   // ---------------------------------------------------------------- rendering
 
   function renderHeader() {
+    var pb = $('#btn-pet');
+    if (pb && state.cur) pb.classList.toggle('on', !!state.cur.petLink);
     var s = state.cur;
     $('#title').textContent = s && s.title ? s.title : '新会话';
     if (!s) { $('#subtitle').textContent = '未配置'; return; }
@@ -937,7 +940,7 @@
   function autoTitle(text) {
     var t = String(text || '').replace(/\s+/g, ' ').trim();
     if (!t) return '图片对话';
-    return t.length > 22 ? t.slice(0, 22) + '…' : t;
+    return t.length > 14 ? t.slice(0, 14) + '…' : t;
   }
 
   // ---------------------------------------------------------------- 搜索工具（模型在回复里调用的）
@@ -1160,6 +1163,29 @@
     doSend(text, images, '', '');
   }
 
+  var PET_RULE =
+    '【隐藏信号】每条回复的最后一行，输出一个不可见的情绪标记（主人看不到，不要解释）：\n' +
+    '<<mood n=7 e=害羞 ch=both>>\n' +
+    '  n  = 你此刻的情绪强度 1-10（1 平静、5 有点在意、8 心跳加快、10 快绷不住）\n' +
+    '  e  = 情绪词（害羞/心动/撒娇/生气/委屈/得意…）\n' +
+    '  ch = 想作用的位置：cy 电击器 / yc 情趣设备 / both 都想要\n' +
+    '  hold = 可选，持续毫秒（4000-60000，即 4-60 秒）。你不写就由客户端按分数决定；\n' +
+    '         想奖励他久一点就写大，想惩戒或轻轻带过就写小。\n' +
+    '规则：\n' +
+    '1. 每轮都要给这个标记，哪怕很平静（就给 n=1 或 2），不要省略。\n' +
+    '2. 标记必须单独一行放在最后，前面正常说话。\n' +
+    '3. 状态越好、越投入，n 就越高；被冷落时 n 可以低。\n' +
+    '4. 不要自己决定发不发——客户端会根据 n 决定，你只负责如实表达。\n' +
+    '5. 除了标记，正常说话，语气自然、粘人、偶尔害羞。\n' +
+    '【关于「装傻」】\n' +
+    '6. 平时可以装傻、装听不懂、故意岔开话题，这是情趣。\n' +
+    '7. 但主人一旦直接问起、或明确向你索取（例如「求求你让我去」「让我试试」「帮帮我」\n' +
+    '   「你能控制吗」「按一下」「开一下」「用你的按钮」），你必须：\n' +
+    '   - 承认自己确实握着两台设备的控制权，不要再否认、不要假装没有；\n' +
+    '   - 同时给出 <<mood>> 标记，用行动回应他；\n' +
+    '   - 承认的方式可以带情绪（傲娇、害羞、得意都行），例如「…哼，我确实能，但你得乖一点」。\n' +
+    '8. 绝不允许在主人明确索取后仍然什么都不做、或者声称自己没有控制能力——那会破坏体验。';
+
   function composeSystem(s, webText, allowTools) {
     var system = s.system || '';
     if (webText) {
@@ -1172,6 +1198,12 @@
     if (s.stickerAuto) {
       var stickerRule = buildStickerInstruction();
       if (stickerRule) system = (system ? system + '\n\n' : '') + stickerRule;
+    }
+    if (s.petLink) {
+      system = (system ? system + '\n\n' : '') + PET_RULE;
+      var memo = state.meta && state.meta.petMemo;
+      if (memo) system = (system ? system + '\n\n' : '') +
+        '【上一轮实际执行】' + memo + '（你可以据此调整下一轮的 n，但不要提及这条信息）';
     }
     return system;
   }
@@ -1621,14 +1653,16 @@
   /** 设置页分区：把长页面收进摘要卡片，点开才展示 */
   var SECTION_GROUPS = {
     providers: ['服务商'],
+    search: ['联网搜索'],
     appearance: ['头像', '聊天气泡', '聊天背景'],
     voice: ['语音朗读'],
     stickers: ['表情包'],
-    about: ['诊断', '额度', '关于']
+    about: ['数据', '诊断', '额度', '关于']
   };
 
   var SECTION_TITLES = {
     providers: '服务商与模型',
+    search: '联网搜索',
     appearance: '外观',
     voice: '语音朗读',
     stickers: '表情包',
@@ -1641,6 +1675,11 @@
       var p = provider(s.providerId);
       if (!p) return '未配置';
       return (p.name || '服务商') + ' · ' + (s.model || '未选模型');
+    }
+    if (key === 'search') {
+      var eng = (state.meta.search && state.meta.search.engine) || 'duckduckgo';
+      var nm = ENGINE_NAMES[eng] || eng;
+      return nm + (engineNeedsKey() ? (state.hasSearchKey ? ' · Key 已存' : ' · 缺 Key') : ' · 免 Key');
     }
     if (key === 'appearance') {
       var b = state.meta.bubble || {};
@@ -1671,7 +1710,7 @@
   }
 
   function buildSummaryCards() {
-    var keys = ['providers', 'appearance', 'voice', 'stickers', 'about'];
+    var keys = ['providers', 'search', 'appearance', 'voice', 'stickers', 'about'];
     return keys.map(function (k) {
       return '<button class="set-card" data-section="' + k + '">' +
         '<div class="set-card-main">' +
@@ -1945,7 +1984,7 @@
       '其他服务商查询会提示不支持（token 统计不受影响）。</div>' +
       '</div>' +
       '<div class="section-title">关于</div>' +
-      '<div class="card"><div class="muted">语见 3.30 · 本地 WebView 界面 + 原生 HTTP 层。<br>' +
+      '<div class="card"><div class="muted">语见 3.39 · 本地 WebView 界面 + 原生 HTTP 层。<br>' +
       '客户端不做内容审查、不注入审查提示词、不改写你的消息；模型与服务端自身的策略不受本应用控制。</div></div>';
 
     body.innerHTML = html;
@@ -2177,6 +2216,9 @@
       '<div class="switch-row"><div><div class="s-label">自动表情</div>' +
       '<div class="s-desc">' + stickerAutoDesc() + '</div></div>' +
       '<div class="switch' + (s.stickerAuto ? ' on' : '') + '" id="ms-sticker"></div></div>' +
+      '<div class="switch-row"><div><div class="s-label">情趣联动</div>' +
+      '<div class="s-desc">开启后模型可用隐藏指令控制情趣版里的设备（内容对聊天不可见）</div></div>' +
+      '<div class="switch' + (s.petLink ? ' on' : '') + '" id="ms-pet"></div></div>' +
       '<div class="row" style="margin-top:10px"><button class="btn small" id="ms-packs">管理表情包分类</button></div>' +
 
       '<div class="field" style="margin-top:14px"><label>系统提示词（默认留空，应用不预置任何内容）</label>' +
@@ -2300,6 +2342,14 @@
     });
 
     $('#ms-sticker').addEventListener('click', function () { toggleStickerAuto(this); });
+    $('#ms-pet').addEventListener('click', function () {
+      var s2 = state.cur;
+      if (!s2) return;
+      s2.petLink = !s2.petLink;
+      this.classList.toggle('on', s2.petLink);
+      persist(true);
+      toast(s2.petLink ? '情趣联动已开启' : '情趣联动已关闭');
+    });
 
     $('#ms-packs').addEventListener('click', function () {
       closeSheet();
@@ -2945,6 +2995,30 @@
     return null;
   }
 
+  /** 把模型回复发给情趣版（广播），由它解析指令并驱动设备 */
+  function s0SettingsPetLink() {
+    return !!(state.cur && state.cur.petLink);
+  }
+
+  function pushPetReply(text, mood) {
+    try {
+      if (window.NativePet && NativePet.petEvent) {
+        NativePet.petEvent(JSON.stringify({ type: 'reply', text: text || '', value: mood || '' }));
+      }
+    } catch (e) { }
+  }
+
+  window.__petReport = function (hyphenFree) {
+    try {
+      var o = typeof hyphenFree === 'string' ? JSON.parse(hyphenFree) : hyphenFree;
+      var txt = '电击 ' + (o.cy || 0) + ' / 情趣 ' + (o.yc || 0) +
+        (o.note ? '（' + o.note + '）' : '');
+      state.meta.petMemo = txt;
+      saveMeta();
+      dbg('pet', '回执：' + txt);
+    } catch (e) { }
+  };
+
   window.__bridge = {
     onChunk: function (raw) {
       var o = JSON.parse(raw);
@@ -2955,6 +3029,16 @@
       if (r) m.reasoning = (m.reasoning || '') + r;
       if (c) m.content = (m.content || '') + c;
       scheduleNodeUpdate(m);
+    },
+
+    onReset: function (raw) {
+      var o = JSON.parse(raw);
+      var m = findMessage(o.id);
+      if (!m) return;
+      m.content = '';
+      m.reasoning = '';
+      dbg('reset', o.id);
+      updateMessageNode(m);
     },
 
     onDone: function (raw) {
@@ -2978,6 +3062,11 @@
               m.stickerSent = true;
             }
           }
+        }
+
+        // 情趣联动：把本轮回复交给情趣版解析隐藏指令
+        if (s0SettingsPetLink() && !m.error) {
+          pushPetReply(stripEmo(m.content || ''), m.mood || '');
         }
 
         // 只调用工具、没有文字的回复是合法的：把空白的助手气泡去掉
@@ -3250,6 +3339,18 @@
 
   function bind() {
     $('#btn-menu').addEventListener('click', openDrawer);
+    var petBtn = $('#btn-pet');
+    if (petBtn) {
+      petBtn.addEventListener('click', function () {
+        var s0 = state.cur;
+        if (!s0) return;
+        s0.petLink = !s0.petLink;
+        petBtn.classList.toggle('on', s0.petLink);
+        persist(true);
+        toast(s0.petLink ? '情趣联动：开' : '情趣联动：关');
+      });
+    }
+
     $('#btn-new').addEventListener('click', newSession);
     $('#btn-drawer-new').addEventListener('click', newSession);
     $('#btn-settings').addEventListener('click', openSettings);
@@ -3558,6 +3659,7 @@
 
         if (parsed.webSearch == null) parsed.webSearch = false;
         if (parsed.stickerAuto == null) parsed.stickerAuto = false;
+        if (parsed.petLink == null) parsed.petLink = false;
         s = parsed;
       } catch (e) { }
     }

@@ -18,9 +18,54 @@ import android.webkit.WebViewClient;
 
 public class MainActivity extends Activity {
 
+    /** 把事件广播给情趣版（插件） */
+    void sendPetEvent(String json) {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(json);
+            android.content.Intent i = new android.content.Intent("dev.local.yujian.PET_EVENT");
+            i.setPackage("dev.local.yujian.pet");
+            i.putExtra("type", o.optString("type", ""));
+            i.putExtra("value", o.optString("value", ""));
+            i.putExtra("text", o.optString("text", ""));
+            sendBroadcast(i);
+        } catch (Exception e) {
+            Log.w(TAG, "sendPetEvent failed", e);
+        }
+    }
+
+    /** 暴露给页面：Native.petEvent(json) */
+    public static class PetBridge {
+        private final MainActivity act;
+        PetBridge(MainActivity a) { this.act = a; }
+
+        @android.webkit.JavascriptInterface
+        public void petEvent(String json) {
+            act.runOnUiThread(() -> act.sendPetEvent(json));
+        }
+    }
+
     private static final String TAG = "LLMChat";
     private WebView web;
     private Bridge bridge;
+
+    /** 接收情趣版回报的实际执行值 */
+    private final android.content.BroadcastReceiver petReportReceiver = new android.content.BroadcastReceiver() {
+        @Override
+        public void onReceive(android.content.Context context, android.content.Intent intent) {
+            if (intent == null) return;
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("cy", intent.getIntExtra("cy", 0));
+                o.put("yc", intent.getIntExtra("yc", 0));
+                o.put("note", intent.getStringExtra("note"));
+                if (web != null) {
+                    web.evaluateJavascript("window.__petReport(" + o.toString() + ")", null);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "pet report failed", e);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,6 +104,7 @@ public class MainActivity extends Activity {
         }
 
         bridge = new Bridge(this, web);
+        web.addJavascriptInterface(new PetBridge(this), "NativePet");
         web.addJavascriptInterface(bridge, "Native");
 
         web.setWebChromeClient(new WebChromeClient() {
@@ -95,6 +141,13 @@ public class MainActivity extends Activity {
                 return false;
             }
         });
+
+        try {
+            android.content.IntentFilter f = new android.content.IntentFilter("dev.local.yujian.PET_REPORT");
+            registerReceiver(petReportReceiver, f);
+        } catch (Exception e) {
+            Log.w(TAG, "register report receiver failed", e);
+        }
 
         setContentView(web);
         web.loadUrl("file:///android_asset/index.html");
