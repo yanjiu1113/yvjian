@@ -1,5 +1,5 @@
-ï»¿# Build æƒ…è¶£ç‰ˆ APK with the standalone Android SDK (aapt2 + javac + d8 + apksigner).
-# å·¥å…·é“¾å¤ç”¨ä»“åº“æ ¹ç›®å½•çš„ .toolchainï¼ˆpet/ æ˜¯è¯­è§ä»“åº“çš„å­ç›®å½•ï¼‰ã€‚
+# Build ÇéÈ¤°æ APK with the standalone Android SDK (aapt2 + javac + d8 + apksigner).
+# ¹¤¾ßÁ´¸´ÓÃ²Ö¿â¸ùÄ¿Â¼µÄ .toolchain£¨pet/ ÊÇÓï¼û²Ö¿âµÄ×ÓÄ¿Â¼£©¡£
 # Usage: powershell -ExecutionPolicy Bypass -File build.ps1
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
@@ -12,8 +12,8 @@ $src = Join-Path $root "app\src\main"
 $out = Join-Path $root "build"
 $dist = Join-Path $root "dist"
 
-$versionCode = "80"
-$versionName = "0.80"
+$versionCode = "81"
+$versionName = "0.81"
 $apkName = "YujianPet-$versionName.apk"
 
 if (-not (Test-Path $androidJar)) { throw "Android SDK not found at $sdk" }
@@ -63,7 +63,7 @@ $zip.Dispose()
 Write-Host "==> zipalign"
 Run "$bt\zipalign.exe" "-f -p 4 `"$out\base.apk`" `"$out\aligned.apk`""
 
-# ä¸èŠå¤©ç«¯å…±ç”¨ç­¾åï¼Œæ–¹ä¾¿ä»¥åç”¨ signature çº§æƒé™åšå¹¿æ’­æ ¡éªŒ
+# ÓëÁÄÌì¶Ë¹²ÓÃÇ©Ãû£¬·½±ãÒÔºóÓÃ signature ¼¶È¨ÏŞ×ö¹ã²¥Ğ£Ñé
 $chatKs = Join-Path (Split-Path $root -Parent) "keystore\llmchat.jks"
 $ks = Join-Path $root "keystore\yujianpet.jks"
 if (-not (Test-Path $ks)) {

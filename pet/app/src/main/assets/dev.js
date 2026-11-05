@@ -410,7 +410,7 @@
       '</div>' +
       '<label class="dev-row" style="gap:8px;align-items:center">' +
         '<input type="checkbox" id="ems-dual"> A/B 同时发</label>' +
-      '<div class="dev-hint" style="margin:0 0 10px" id="ems-hint2">A 口走主通道（FF30），B 口走备用通道（AE00）。当前只在 A 口验证到放电。</div>' +
+      '<div class="dev-hint" style="margin:0 0 10px" id="ems-hint2">0.81 起实时帧按官方格式同时带 A/B 两段：选 A 就只填 A 段、选 B 就只填 B 段。0.80 及以前只发 A 段，所以 B 口一直没反应。</div>' + +
 
       '<div class="dev-sec">输出（硬上限 20）</div>' +
       '<div class="dev-warn">强度被原生层夹死在 <b>20</b>，滑到顶也只发 20。之前填 3 却像满功率，是因为帧格式被固件当成两字节强度解析，那个入口已经删除。</div>' +
@@ -433,6 +433,11 @@
       '<div class="row" style="gap:8px;margin-top:8px">' +
         '<button class="dev-btn ghost" id="ems-burstb">B 口连发 3 秒</button>' +
       '</div>' +
+      '<div class="row" style="gap:8px;margin-top:8px">' +
+        '<button class="dev-btn" id="ems-atest">A 口 5 级</button>' +
+        '<button class="dev-btn" id="ems-btest">B 口 5 级</button>' +
+      '</div>' +
+      '<div class="dev-hint" style="margin:0 0 8px">这两个按钮用完整实时帧（A/B 两段同帧）单发一次，用来验证哪一路真的出电。</div>' +
       '<label class="dev-row" style="gap:8px;align-items:center">' +
         '<input type="checkbox" id="ems-bfollow"> B 跟随 A（A 出力时每 700ms 补发一帧到 B）</label>' +
       '<div class="dev-hint" style="margin:0 0 8px">实测：先让 A 放电再点停止，B 会闪一下。说明 B 可能只是同一个输出级切过去，需要连续帧维持。</div>' +
@@ -515,6 +520,21 @@
       if (window.Coyote) window.Coyote.emsBurstB(s, m, 3000);
       addLog('B 口连发：强度 ' + s + ' 模式 ' + m + '（3 秒自动停）');
     });
+    // 0.81：用完整实时帧分别打 A/B 段，验证哪一路真的出电
+    function emsOneShot(port) {
+      var f = Number($('ems-freq').value) || 50;
+      var p = Number($('ems-pulse').value) || 50;
+      st.emsCh = port;
+      try { localStorage.setItem('emsCh', String(port)); } catch (e) { }
+      if (window.Coyote) window.Coyote.emsChannel(port);
+      paintChannels();
+      if (window.Coyote) window.Coyote.ycyEmsReal(5, f, p);
+      var t = port === 0 ? 'A' : 'B';
+      $('ems-hint').textContent = '已发：只给 ' + t + ' 口 5 级（完整帧）';
+      addLog('完整帧 ' + t + ' 口 强度 5（口选择已切到 ' + t + '）');
+    }
+    $('ems-atest').addEventListener('click', function () { emsOneShot(0); });
+    $('ems-btest').addEventListener('click', function () { emsOneShot(1); });
     $('ems-sendreal').addEventListener('click', function () {
       var s = Number($('ems-str').value);
       var f = Number($('ems-freq').value);

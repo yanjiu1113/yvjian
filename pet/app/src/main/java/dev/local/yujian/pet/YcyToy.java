@@ -184,7 +184,7 @@ public class YcyToy {
         return f;
     }
 
-    /** EMS 实时模式：0x35 0x11 0x02 强度高 强度低 频率 脉冲 校验 */
+    /** EMS 实时模式（旧写法，只带 A 段）：0x35 0x11 0x02 强度高 强度低 频率 脉冲 校验 */
     static byte[] cmdEmsReal(int strength, int freq, int pulse) {
         int s = clamp(strength, 0, 276);
         byte[] f = new byte[8];
@@ -196,6 +196,28 @@ public class YcyToy {
         f[5] = (byte) clamp(freq, 1, 100);
         f[6] = (byte) clamp(pulse, 0, 100);
         f[7] = sum(f, 7);
+        return f;
+    }
+
+    /**
+     * EMS 实时模式（官方新协议完整帧，A/B 两路同帧）：
+     * 35 11 02 [A强度2B][A波形][A时长] [B强度2B][B波形][B时长] 校验
+     */
+    static byte[] cmdEmsDual(int sa, int pla, int tla, int sb, int plb, int tlb) {
+        int a = clamp(sa, 0, 276), b = clamp(sb, 0, 276);
+        byte[] f = new byte[12];
+        f[0] = 0x35;
+        f[1] = 0x11;
+        f[2] = 0x02;
+        f[3] = (byte) ((a >> 8) & 0xFF);
+        f[4] = (byte) (a & 0xFF);
+        f[5] = (byte) clamp(pla, 1, 100);
+        f[6] = (byte) clamp(tla, 0, 100);
+        f[7] = (byte) ((b >> 8) & 0xFF);
+        f[8] = (byte) (b & 0xFF);
+        f[9] = (byte) clamp(plb, 1, 100);
+        f[10] = (byte) clamp(tlb, 0, 100);
+        f[11] = sum(f, 11);
         return f;
     }
 
@@ -427,13 +449,31 @@ public class YcyToy {
         @Override
         public void run() {
             if (emsStrength <= 0) return;
-            byte[] f = emsRealMode ? cmdEmsReal(emsStrength, emsFreq, emsPulse)
+            byte[] f = emsRealMode ? emsRealtimeFrame(emsStrength, emsFreq, emsPulse)
                     : cmdEmsFixed(emsStrength, emsMode);
             write(f);
             if (bFollow && candidates.size() > 1) writeTo(f, 1);
             main.postDelayed(this, 700);
         }
     };
+
+    /**
+     * 按当前电极口选择生成实时帧。
+     * 官方一帧同时带 A/B 两段，用哪一路就把另一路填 0——这是 B 口能不能出电的关键。
+     */
+    private byte[] emsRealtimeFrame(int strength, int freq, int pulse) {
+        int sa, sb;
+        if (dualChannel) {
+            sa = sb = strength;
+        } else if (channelIndex == 0) {
+            sa = strength;
+            sb = 0;
+        } else {
+            sa = 0;
+            sb = strength;
+        }
+        return cmdEmsDual(sa, freq, pulse, sb, freq, pulse);
+    }
 
     private volatile boolean emsRealMode = false;
 
@@ -615,7 +655,7 @@ public class YcyToy {
         chanMode = false;
         final byte[] zc = {0x35, 0x11, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00};
         byte[] zf = cmdEmsFixed(0, emsMode);
-        byte[] zr = cmdEmsReal(0, emsFreq, emsPulse);
+        byte[] zr = cmdEmsDual(0, 1, 1, 0, 1, 1);   // 官方 stopFrames：35 11 02 0000 0101 0000 0101
         final int g0 = gen;
         for (int round = 0; round < 3; round++) {
             main.postDelayed(() -> {
@@ -680,20 +720,21 @@ public class YcyToy {
         pushState();
     }
 
-    /** 电击器：实时模式（频率/脉冲可调） */
+    /** 电击器：实时模式（频率/脉冲可调），按当前电极口把强度写进 A 段或 B 段 */
     public void setEmsReal(int strength, int freq, int pulse) {
         emsStrength = emsClamp(strength);
         emsFreq = clamp(freq, 1, 100);
         emsPulse = clamp(pulse, 0, 100);
         emsRealMode = true;
-        byte[] frame2 = cmdEmsReal(emsStrength, emsFreq, emsPulse);
+        byte[] frame2 = emsRealtimeFrame(emsStrength, emsFreq, emsPulse);
         if (emsStrength > 0) {
             if (dualChannel) writeBoth(frame2); else write(frame2);
             startKeepAlive();
         } else {
             panicZero();
         }
-        log("EMS 实时：强度 " + emsStrength + " " + emsFreq + "Hz 脉冲 " + emsPulse);
+        log("EMS 实时：强度 " + emsStrength + " " + emsFreq + "Hz 脉冲 " + emsPulse
+                + " → " + (dualChannel ? "A+B" : channelIndex == 0 ? "A 口" : "B 口"));
         pushState();
     }
 
@@ -952,9 +993,22 @@ public class YcyToy {
             }
             pushState();
             main.postDelayed(() -> {
-                if (devType == 1 || emsRole) queryStatus();   // 电击器：查电量 + 通道
-                else queryInfo();                  // 杯子：查型号与马达
+                if (devType == 1 || emsRole) {
+                    emsHandshake();                    // 官方连上 200ms 后发 35 14 01
+                    main.postDelayed(() -> queryStatus(), 120);   // 电击器：查电量 + 通道
+                } else {
+                    queryInfo();                       // 杯子：查型号与马达
+                }
             }, 300);
+        }
+
+        /** 官方连接握手（ele.js onConnected 里 200ms 后发 "351401"，不带校验） */
+        @SuppressLint("MissingPermission")
+        private void emsHandshake() {
+            byte[] f = {0x35, 0x14, 0x01};
+            writeBusy = false;
+            if (!candidates.isEmpty()) writeTo(f, 0); else write(f);
+            log("EMS 握手 35 14 01");
         }
 
         @Override
