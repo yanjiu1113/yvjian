@@ -321,12 +321,25 @@
       '<input id="cup-mac" class="sock-in" placeholder="XX:XX:XX:XX:XX:XX" spellcheck="false"></div>' +
       '<div class="dev-row"><button class="dev-btn" id="cup-macgo">按 MAC 连接</button></div>' +
       '<div id="cup-motors"></div>' +
+      '<div class="dev-sec">三路力度</div>' +
+      '<div class="sock-row"><label>A 旋转</label>' +
+      '<input type="range" id="cup-a" min="0" max="20" step="1" value="0" style="flex:1">' +
+      '<span class="dbg-val" id="cup-av">0</span></div>' +
+      '<div class="sock-row"><label>B 真空</label>' +
+      '<input type="range" id="cup-b" min="0" max="20" step="1" value="0" style="flex:1">' +
+      '<span class="dbg-val" id="cup-bv">0</span></div>' +
+      '<div class="sock-row"><label>C 杯身振动</label>' +
+      '<input type="range" id="cup-c" min="0" max="20" step="1" value="0" style="flex:1">' +
+      '<span class="dbg-val" id="cup-cv">0</span></div>' +
+      '<div class="dev-hint">C 这一位驱动的是杯身振动 D。内胆振动（原 C）线圈已损坏，任何值都不会响应，别拿它当反馈依据。</div>' +
+      '<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">' +
+      '<button class="dev-btn small" id="cup-only-a">只 A=20</button>' +
+      '<button class="dev-btn small" id="cup-only-b">只 B=20</button>' +
+      '<button class="dev-btn small" id="cup-only-c">只 C=20</button>' +
+      '<button class="dev-btn small ghost" id="cup-zero">全停</button>' +
+      '</div>' +
       '<div class="dev-sec">限位</div>' +
       '<div class="sock-row"><label>输出时长</label><div id="cup-range" style="flex:1"></div></div>' +
-      '<div class="dev-sec">手动力度</div>' +
-      '<div class="sock-row"><label>力度</label>' +
-      '<input type="range" id="cup-manual" min="0" max="20" step="1" value="0" style="flex:1">' +
-      '<span class="dbg-val" id="cup-manualv">0</span></div>' +
       '<button class="dev-emergency sm" id="cup-stopall">停 止 输 出</button>' +
       '<button class="dev-reset" id="cup-reset">重 置 榨 精 杯</button>';
 
@@ -353,18 +366,35 @@
       saveMac('cup', mac);
       if (window.Coyote) { window.Coyote.ycyDevType(0); window.Coyote.ycyConnect(mac); }
     });
-    $('cup-manual').addEventListener('input', function () {
-      var v = Number(this.value);
-      $('cup-manualv').textContent = v;
-      st.cupSpeed = { a: v, b: v, c: v };
-      if (window.Coyote) window.Coyote.ycySpeed(v, v, v);
+    function pushCup() {
+      if (window.Coyote) window.Coyote.ycySpeed(st.cupSpeed.a, st.cupSpeed.b, st.cupSpeed.c);
+    }
+    ['a', 'b', 'c'].forEach(function (k) {
+      var sl = $('cup-' + k), out = $('cup-' + k + 'v');
+      if (!sl) return;
+      sl.addEventListener('input', function () {
+        var v = Number(this.value);
+        st.cupSpeed[k] = v;
+        if (out) out.textContent = v;
+        pushCup();
+      });
     });
+    function cupPreset(a, b, c) {
+      st.cupSpeed = { a: a, b: b, c: c };
+      syncCupSliders();
+      pushCup();
+      addLog('榨精杯：A' + a + ' B' + b + ' C' + c);
+    }
+    if ($('cup-only-a')) $('cup-only-a').addEventListener('click', function () { cupPreset(20, 0, 0); });
+    if ($('cup-only-b')) $('cup-only-b').addEventListener('click', function () { cupPreset(0, 20, 0); });
+    if ($('cup-only-c')) $('cup-only-c').addEventListener('click', function () { cupPreset(0, 0, 20); });
+    if ($('cup-zero')) $('cup-zero').addEventListener('click', function () { cupPreset(0, 0, 0); });
     buildDualRange('cup-range', 4, 60, st.ycHoldMin / 1000, st.ycHoldMax / 1000, function (lo, hi) {
       st.ycHoldMin = lo * 1000; st.ycHoldMax = hi * 1000; saveLimits();
     });
     $('cup-stopall').addEventListener('click', function () {
       st.cupSpeed = { a: 0, b: 0, c: 0 };
-      $('cup-manual').value = 0; $('cup-manualv').textContent = '0';
+      syncCupSliders();
       if (window.Coyote) window.Coyote.ycyStop();
       addLog('榨精杯已停止输出');
       render();
@@ -372,7 +402,7 @@
 
     $('cup-reset').addEventListener('click', function () {
       st.cupSpeed = { a: 0, b: 0, c: 0 };
-      $('cup-manual').value = 0; $('cup-manualv').textContent = '0';
+      syncCupSliders();
       if (window.Coyote) { window.Coyote.ycyStop(); window.Coyote.ycySpeed(0, 0, 0); }
       addLog('榨精杯已重置'); renderCupMotors(); render();
     });
@@ -1030,9 +1060,13 @@
     }
     var mcup = $('m-cup');
     if (mcup) {
-      mcup.textContent = '榨精杯：' + (st.cupOn ? ('已连接' + (st.cupSpeed.a ? ' · 力度 ' + st.cupSpeed.a : ' · 待机')) : '未连接');
+      var cs = st.cupSpeed;
+      var live = cs.a || cs.b || cs.c;
+      mcup.textContent = '榨精杯：' + (st.cupOn
+        ? ('已连接' + (live ? ' · A' + cs.a + ' B' + cs.b + ' C' + cs.c : ' · 待机')) : '未连接');
       mcup.className = 'dev-status' + (st.cupOn ? ' on' : '');
     }
+    syncCupSliders();
     var mems = $('m-ems');
     if (mems) {
       mems.textContent = '电击器：' + (st.emsOn
@@ -1086,30 +1120,25 @@
     });
   }
 
+  function syncCupSliders() {
+    ['a', 'b', 'c'].forEach(function (k) {
+      var sl = $('cup-' + k), out = $('cup-' + k + 'v');
+      var v = st.cupSpeed[k] || 0;
+      if (sl && Number(sl.value) !== v) sl.value = v;
+      if (out) out.textContent = v;
+    });
+  }
+
   function renderCupMotors() {
     var el = $('cup-motors');
     if (!el) return;
-    var html = '';
-    ['a', 'b', 'c'].forEach(function (k) {
-      var n = st.cupModes[k];
-      if (!n) return;
-      html += '<div class="dev-sec">马达 ' + k.toUpperCase() + '（' + n + ' 模式）</div>' +
-        '<div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">' +
-        '<button class="dev-btn small" data-motor="' + k + '" data-mode="0">关</button>';
-      for (var m = 1; m <= n; m++) {
-        html += '<button class="dev-btn small" data-motor="' + k + '" data-mode="' + m + '">' + m + '</button>';
-      }
-      html += '</div>';
-    });
-    el.innerHTML = html || '<div class="dev-hint">连接后自动读取马达信息。</div>';
-    el.querySelectorAll('[data-mode]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var motor = b.dataset.motor, mode = Number(b.dataset.mode);
-        var mask = motor === 'a' ? 1 : (motor === 'b' ? 2 : 4);
-        if (window.Coyote) window.Coyote.ycyMode(mask, mode);
-        addLog('马达 ' + motor.toUpperCase() + ' 模式 ' + mode);
-      });
-    });
+    if (!st.cupModes.a && !st.cupModes.b && !st.cupModes.c) {
+      el.innerHTML = '<div class="dev-hint">连接后自动读取设备信息（型号 / 三路模式数 / 电量）。</div>';
+      return;
+    }
+    el.innerHTML = '<div class="dev-info">A 旋转 ' + st.cupModes.a + ' 模式 · B 真空 '
+      + st.cupModes.b + ' 模式 · C 内胆振动 ' + st.cupModes.c
+      + ' 模式（硬件坏，本机不响应）</div>';
   }
 
   /* ================= 持久化 ================= */

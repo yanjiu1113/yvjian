@@ -34,10 +34,17 @@ import java.util.UUID;
  *
  * 服务 FF40：FF41 写入（无响应）/ FF42 通知
  * 指令：0x35 开头，最后一位是前面所有字节的累加和（低 8 位）
- *   0x10  查询设备信息
- *   0x11  固定模式：马达掩码 + 模式号（0=关，1..N）
- *   0x12  速率控制：A/B/C 力度（0=关，1-20）
+ *   0x10  查询设备信息（回包 35 10 型号 版本 A模式数 B模式数 C模式数 …）
+ *   0x11  固定模式：马达掩码 + 模式号 —— 已永久弃用，会让流长度解析错位
+ *   0x12  速率控制：6 字节 35 12 [A] [B] [C] 校验，每路 0-20
  *   0x13  设备上报电量
+ *
+ * 四个通道（YCY-FJB-03，2026-11-15 实测）：
+ *   A 旋转/转动   帧内第 1 个数据字节   正常
+ *   B 真空/吮吸   帧内第 2 个数据字节   正常
+ *   C 内胆振动    帧内第 3 个数据字节   硬件损坏（VCM 线圈氧化，任何值都不响应）
+ *   D 杯身振动    帧内第 3 个数据字节   正常
+ * C 与 D 共用第 3 字节，所以「振动」这一路实际驱动的是杯身的 D。
  */
 public class YcyToy {
 
@@ -132,18 +139,11 @@ public class YcyToy {
         return f;
     }
 
-    /** 0x11 固定模式：motors 位掩码，mode 0=关 */
-    static byte[] cmdMode(int motors, int mode) {
-        byte[] f = new byte[5];
-        f[0] = 0x35;
-        f[1] = 0x11;
-        f[2] = (byte) (motors & 0x07);
-        f[3] = (byte) (mode & 0xFF);
-        f[4] = sum(f, 4);
-        return f;
-    }
+    // 0x11「固定模式帧」已永久弃用（2026-11-15）：
+    // 它会让设备按流长度解析错位，把某一路顶到最大，实测差点出事。
+    // 现在只发下面这种 6 字节速度帧。
 
-    /** 0x12 速率：A/B/C 力度 0-20 */
+    /** 0x12 速率：A/B/C 力度 0-20（C 这一位实际驱动杯身振动 D） */
     static byte[] cmdSpeed(int a, int b, int c) {
         byte[] f = new byte[6];
         f[0] = 0x35;
@@ -348,8 +348,9 @@ public class YcyToy {
     }
 
     public void setMode(int motors, int mode) {
-        write(cmdMode(motors, mode));
-        log("模式：马达 0x" + Integer.toHexString(motors) + " → " + mode);
+        // 0x11 固定模式帧已弃用，见上方注释；这里只记日志，不发任何字节。
+        log("马达模式帧已弃用（0x11 会让流错位），忽略：掩码 0x"
+                + Integer.toHexString(motors) + " → " + mode);
     }
 
     public void setSpeed(int a, int b, int c) {
@@ -376,7 +377,6 @@ public class YcyToy {
         public void run() {
             speedA = speedB = speedC = 0;
             write(cmdSpeed(0, 0, 0));
-            write(cmdMode(0x07, 0));
             log("到时归零（役次元）");
             pushState();
         }
@@ -745,8 +745,9 @@ public class YcyToy {
             emsRealMode = false;
             panicZero();
         } else {
-            write(cmdMode(0x07, 0));
+            // 只发 6 字节速度帧；补发一次，防止单包丢失
             write(cmdSpeed(0, 0, 0));
+            main.postDelayed(() -> { if (connected && devType == 0) write(cmdSpeed(0, 0, 0)); }, 120);
         }
         log("急停：全部归零");
         pushState();

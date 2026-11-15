@@ -1246,3 +1246,14 @@ html, body {
 .dev-danger b { color: #fff; }
 .dev-danger ul { margin: 6px 0 0; padding-left: 18px; }
 .dev-danger li { margin: 2px 0; }
+/* 设备信息单行（榨精杯：三路模式数 / 电量） */
+.dev-info {
+  margin: 4px 0 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid rgba(255, 255, 255, .08);
+  font-size: 12px;
+  line-height: 1.6;
+  color: #b9c2d0;
+}
