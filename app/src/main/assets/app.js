@@ -271,7 +271,6 @@
       stream: true,
       webSearch: false,
       stickerAuto: false,
-      deviceTools: true,
       petLink: false,
       autoRead: false,
       toolOn: {},
@@ -328,8 +327,14 @@
 
     if (s.webSearch == null) s.webSearch = false;
     if (s.stickerAuto == null) s.stickerAuto = false;
-    if (s.deviceTools == null) s.deviceTools = true;
     if (!s.toolOn) s.toolOn = {};
+    // 旧版的「手机工具」总闸已经拆成逐项开关；关过总闸的人，把三个设备工具一并标成关闭
+    if (s.deviceTools === false) {
+      s.toolOn.take_photo = false;
+      s.toolOn.read_compass = false;
+      s.toolOn.read_level = false;
+    }
+    if (s.deviceTools !== undefined) delete s.deviceTools;
     if (!s.tasks) s.tasks = [];
     state.cur = s;
     state.stickerPick = null;
@@ -1229,8 +1234,8 @@
   function chatTools(s, allowSearch) {
     var list = [];
     if (s && allowSearch && toolOn(s, 'web_search')) list = list.concat(searchTools());
-    if (s && s.deviceTools && toolOn(s, 'take_photo')) list = list.concat(deviceTools(s));
-    if (s && s.stickerAuto) {
+    if (s && (toolOn(s, 'take_photo') || toolOn(s, 'read_compass') || toolOn(s, 'read_level'))) list = list.concat(deviceTools(s));
+    if (s && s.stickerAuto && toolOn(s, 'send_sticker')) {
       var names = stickerCategoryNames();
       if (names.length) list = list.concat(stickerTools(names));
     }
@@ -1388,7 +1393,10 @@
     if (allowTools) {
       system = (system ? system + '\n\n' : '') + buildSearchToolPrompt(true);
     }
-    if (s.deviceTools && (toolOn(s, 'take_photo') || toolOn(s, 'read_compass') || toolOn(s, 'read_level'))) {
+    // 只有用户真的在「设置 → 工具」里动过设备开关，才额外注入这段说明；
+    // 否则保持 payload 里没有 system（有人刻意留空系统提示词）。
+    var devExplicit = !!(s.toolOn && (s.toolOn.take_photo === true || s.toolOn.read_compass === true || s.toolOn.read_level === true));
+    if (devExplicit && (toolOn(s, 'take_photo') || toolOn(s, 'read_compass') || toolOn(s, 'read_level'))) {
       system = (system ? system + '\n\n' : '') + DEVICE_RULE;
     }
     if (s.stickerAuto) {
@@ -2792,11 +2800,10 @@
       '<div class="s-desc">开启后模型可用隐藏指令控制情趣版里的设备（内容对聊天不可见）</div></div>' +
       '<div class="switch' + (s.petLink ? ' on' : '') + '" id="ms-pet"></div></div>' +
       '<div class="switch-row"><div><div class="s-label">手机工具</div>' +
-      '<div class="s-desc">允许模型拍照、读指南针和水平仪；拍到的照片会作为一条消息发给模型</div></div>' +
-      '<div class="switch' + (s.deviceTools !== false ? ' on' : '') + '" id="ms-device"></div></div>' +
+      '<div class="s-desc">拍照 / 指南针 / 水平仪各自独立开关，在「设置 → 工具」里逐项控制；关掉的那一项，模型连它的名字都看不到</div></div>' +
+      '<button class="btn small" id="ms-tools2">逐项设置</button></div>' +
       '<div class="row" style="margin-top:10px"><button class="btn small" id="ms-tools">工具开关（逐项）</button>' +
       '<button class="btn small" id="ms-packs">管理表情包分类</button></div>' +
-      '<div class="s-desc" style="margin-top:6px">逐项开关在「设置 → 工具」里；这一行只是总闸。</div>' +
 
       '<div class="field" style="margin-top:14px"><label>系统提示词（默认留空，应用不预置任何内容）</label>' +
       '<textarea id="ms-sys" placeholder="留空则不发送 system 消息">' + esc(s.system || '') + '</textarea></div>' +
@@ -2930,13 +2937,8 @@
       toast(s2.petLink ? '情趣联动已开启' : '情趣联动已关闭');
     });
 
-    $('#ms-device').addEventListener('click', function () {
-      var s2 = state.cur;
-      if (!s2) return;
-      s2.deviceTools = !(s2.deviceTools !== false);
-      this.classList.toggle('on', s2.deviceTools);
-      persist(true);
-      toast(s2.deviceTools ? '手机工具已开启' : '手机工具已关闭');
+    $('#ms-tools2').addEventListener('click', function () {
+      openToolSheet();
     });
 
     $('#ms-packs').addEventListener('click', function () {
