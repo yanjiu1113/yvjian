@@ -1036,10 +1036,20 @@
       } else if (m.role === 'tool') {
         if (m.pending) continue;
         if (m.device === 'memory') {
+          // 记忆树是她自己写的，所以要用 assistant 角色回灌：
+          // 用 user 角色的话，她会以为这些是对方告诉她的
           out.push({
-            role: 'user',
-            content: '【你自己的记忆】\n' + (m.content || '（什么都没有记下）') +
-              '\n\n以上是你以前写进记忆树的东西，只有你能看见。按需要自然地提及，不要逐条复述，也不要说"根据我的记忆数据"这种话。'
+            role: 'assistant',
+            content: '（我翻开自己的记忆树，看了看以前自己写下的东西）\n' + (m.content || '（里面什么都没有）') +
+              '\n\n（这些是我自己记下的，不是对方说的。要提就自然地带出来，不要逐条复述，也不要说“根据我的记忆”这种话。）'
+          });
+          continue;
+        }
+        if (m.device === 'tree') {
+          // 写入成功回执同样是她自己做的动作
+          out.push({
+            role: 'assistant',
+            content: '（我把这件事记进了自己的记忆树：' + (m.content || '已记下') + '）'
           });
           continue;
         }
@@ -1993,7 +2003,7 @@
         n.emotion + '（分量 ' + n.weight + '）——' + ev;
     });
     var total = t.nodes.length;
-    var head = '记忆树上一共 ' + total + ' 条，这里是最近的 ' + nodes.length + ' 条（新的在前）：';
+    var head = '我自己一共记下过 ' + total + ' 件事，下面是最近的 ' + nodes.length + ' 条（新的在前）：';
     return head + '\n' + lines.join('\n');
   }
 
