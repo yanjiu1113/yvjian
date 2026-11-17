@@ -24,7 +24,8 @@
       stickerPacks: [],
       search: { engine: 'duckduckgo' },
       chatBackground: { preset: 'none', image: '', dim: 0.45 },
-      stickerProb: {}
+      stickerProb: {},
+      timestamps: false
     },
     packId: '',
     stickers: { tree: false, categories: [] },
@@ -302,6 +303,7 @@
       meta.providerId = s.providerId;
       meta.count = s.messages.length;
     }
+    meta.hasTasks = !!(s.tasks && s.tasks.length);
   }
 
   function refreshSessions() {
@@ -521,6 +523,12 @@
         b.textContent = m.content;
         col.appendChild(b);
       }
+      if (timeOn() && m.ts) {
+        var ut = document.createElement('div');
+        ut.className = 'msg-time';
+        ut.textContent = fmtClock(m.ts);
+        col.appendChild(ut);
+      }
       inner.appendChild(col);
       inner.appendChild(avatarEl('user'));
       wrap.appendChild(inner);
@@ -550,6 +558,12 @@
               (m.engine ? ' · ' + esc(ENGINE_NAMES[m.engine] || m.engine) : ''));
       }
       card.innerHTML = '<div class="tool-head">' + head + '</div>';
+      if (m.device === 'task' && m.taskId) {
+        var tcd = document.createElement('div');
+        tcd.className = 'tool-cd';
+        tcd.innerHTML = '还剩 <span data-cd="' + m.taskId + '">--:--</span>';
+        card.appendChild(tcd);
+      }
       if (m.images && m.images.length) {
         if (m.device === 'sticker' && m.images.length > 1) {
           var picks = document.createElement('div');
@@ -649,6 +663,12 @@
     acts.innerHTML = '<button class="mini-btn" data-act="copy">复制</button>' +
       '<button class="mini-btn" data-act="retry">重新生成</button>' + speakBtn + forceBtn;
     col.appendChild(acts);
+    if (timeOn() && m.ts) {
+      var at = document.createElement('div');
+      at.className = 'msg-time';
+      at.textContent = fmtClock(m.ts);
+      col.appendChild(at);
+    }
 
     inner.appendChild(avatarEl('assistant'));
     inner.appendChild(col);
@@ -968,22 +988,23 @@
       if (m.id === excludeId) break;
       if (m.role === 'user') {
         var hasText = !!(m.content && m.content.trim());
+        var tPfx = (timeOn() && m.ts) ? ('[' + fmtStamp(m.ts) + '] ') : '';
         // 定时任务这类系统自己塞进来的触发语：给模型看，但明确标成"不是对方说的话"
         if (hasText && m.hidden) {
           out.push({
             role: 'user',
             content: '（下面是客户端在你设定的时间到达时自动插入的内部提醒，不是你对面的人说的话；' +
-              '按它的意思主动开口，但不要复述它、也不要当成是他说的。）\n' + m.content
+              '按它的意思主动开口，但不要复述它、也不要当成是他说的。）\n' + tPfx + m.content
           });
           continue;
         }
         if (m.images && m.images.length) {
           var parts = [];
-          if (hasText) parts.push({ type: 'text', text: m.content });
+          if (hasText) parts.push({ type: 'text', text: tPfx + m.content });
           m.images.forEach(function (u) { parts.push({ type: 'image_url', image_url: { url: u } }); });
           out.push({ role: 'user', content: parts });
         } else if (hasText) {
-          out.push({ role: 'user', content: m.content });
+          out.push({ role: 'user', content: tPfx + m.content });
         }
       } else if (m.role === 'assistant') {
         if (m.content && m.content.trim() && !m.error) {
@@ -1198,6 +1219,35 @@
     if (!s) return true;
     var t = s.toolOn || {};
     return t[key] !== false;
+  }
+
+  // ---------------------------------------------------------------- 时间戳
+  function timeOn() { return !!(state.meta && state.meta.timestamps); }
+  function p2(n) { return (n < 10 ? '0' : '') + n; }
+  /** 气泡上显示的时间：今天只显示时分，跨天带月日。 */
+  function fmtClock(ts) {
+    if (!ts) return '';
+    var d = new Date(ts), n = new Date();
+    var same = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+    return same ? (p2(d.getHours()) + ':' + p2(d.getMinutes()))
+      : (p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()));
+  }
+  function fmtStamp(ts) {
+    var d = new Date(ts);
+    return p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+  }
+  function nowText() {
+    var d = new Date();
+    var wd = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' +
+      p2(d.getHours()) + ':' + p2(d.getMinutes()) + '（周' + wd + '）';
+  }
+  /** 倒计时显示：mm:ss，超过一小时带小时。 */
+  function fmtCd(ms) {
+    if (ms < 0) ms = 0;
+    var sec = Math.ceil(ms / 1000);
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), ss = sec % 60;
+    return h > 0 ? (h + ':' + p2(m) + ':' + p2(ss)) : (p2(m) + ':' + p2(ss));
   }
 
   /** 手机硬件工具：拍照、指南针、水平仪。由模型自己判断什么时候用。 */
@@ -1428,6 +1478,10 @@
       var memo = state.meta && state.meta.petMemo;
       if (memo) system = (system ? system + '\n\n' : '') +
         '【上一轮实际执行】' + memo + '（你可以据此调整下一轮的 n，但不要提及这条信息）';
+    }
+    if (timeOn()) {
+      system = (system ? system + '\n\n' : '') +
+        '【时间】现在是 ' + nowText() + '。消息开头的 [MM-DD HH:MM] 是本地时间，可以据此判断隔了多久、是白天还是深夜。';
     }
     return system;
   }
@@ -1762,66 +1816,105 @@
     if (!s.tasks) s.tasks = [];
     var t = {
       id: uid(),
+      sid: s.id,
       due: Date.now() + call.seconds * 1000,
       prompt: call.prompt,
       label: call.label || ('约 ' + fmtDur(call.seconds) + '后')
     };
     s.tasks.push(t);
-    armTask(t);
+    armTask(t, s.id);
 
     var tool = {
-      id: uid(), role: 'tool', device: 'task', ts: now(), pending: false,
-      content: '已安排：' + t.label + '（' + fmtDur(call.seconds) + '后）'
+      id: uid(), role: 'tool', device: 'task', ts: now(), pending: false, taskId: t.id,
+      content: '已安排：' + t.label + '（' + fmtDur(call.seconds) + '后）\n到点我会自己开口，倒计时见下方。'
     };
     s.messages.push(tool);
     assistantMsg.streaming = false;
     state.streamingId = null;
     renderMessages();
     renderComposer();
+    renderTaskBar();
     persist(true);
     continueAfterSearch();
     return true;
   }
 
-  var taskTimers = {};      // id → 计时器句柄（防同一任务被 arm 两次）
-  var firedTasks = {};      // id → 已经触发过
+  // ---------------------------------------------------------------- 定时任务（全局调度）
+  var taskTimers = {};      // 'sid:taskId' → 计时器句柄
+  var firedTasks = {};      // 'sid:taskId' → 已经触发过
 
-  function armTask(t) {
-    if (!t || !t.id) return;
-    var left = t.due - Date.now();
-    if (left < 0) left = 0;
-    if (taskTimers[t.id]) { clearTimeout(taskTimers[t.id]); delete taskTimers[t.id]; }
-    taskTimers[t.id] = setTimeout(function () { delete taskTimers[t.id]; fireTask(t.id); }, Math.min(left, 2147483000));
+  function taskKey(sid, tid) { return sid + ':' + tid; }
+
+  function findTask(s, id) {
+    var list = (s && s.tasks) || [];
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i];
+    return null;
   }
 
-  /** 到点了：让模型自己开口。这条触发文本只进上下文，不显示成"我"说的话。 */
-  function fireTask(id) {
-    var s = state.cur;
-    if (!s) return;
-    if (firedTasks[id]) return;         // 同一任务只触发一次
-    var t = null;
-    for (var i = 0; i < (s.tasks || []).length; i++) if (s.tasks[i].id === id) t = s.tasks[i];
+  function armTask(t, sid) {
+    if (!t || !t.id || !sid) return;
+    var key = taskKey(sid, t.id);
+    var left = t.due - Date.now();
+    if (left < 0) left = 0;
+    if (taskTimers[key]) { clearTimeout(taskTimers[key]); delete taskTimers[key]; }
+    taskTimers[key] = setTimeout(function () {
+      delete taskTimers[key];
+      fireTask(sid, t.id);
+    }, Math.min(left, 2147483000));
+  }
+
+  /** 到点了：让模型自己开口。触发文本只进上下文，不显示成"我"说的话。 */
+  function fireTask(sid, id) {
+    var key = taskKey(sid, id);
+    if (firedTasks[key]) return;
+    var cur = state.cur;
+    var isCur = !!(cur && cur.id === sid);
+    var s = cur, t = null;
+
+    if (isCur) {
+      t = findTask(s, id);
+    } else {
+      // 不在这个会话里：不能直接接话（会串台），先读到内存再标成待触发
+      var raw = '';
+      try { raw = Native.loadSession(sid); } catch (e) { raw = ''; }
+      if (!raw) return;
+      try { s = JSON.parse(raw); } catch (e) { return; }
+      t = findTask(s, id);
+    }
     if (!t) return;
-    if (taskTimers[id]) { clearTimeout(taskTimers[id]); delete taskTimers[id]; }
-    s.tasks = (s.tasks || []).filter(function (x) { return x.id !== id; });
-    persist(true);
-    if (state.streamingId) {   // 正在说话就顺延 30 秒
-      t.due = Date.now() + 30000;
-      s.tasks.push(t);
-      armTask(t);
+    if (taskTimers[key]) { clearTimeout(taskTimers[key]); delete taskTimers[key]; }
+
+    if (!isCur) {
+      t.due = Date.now();
+      t.pending = true;
+      try { Native.saveSession(JSON.stringify(s)); } catch (e) { }
+      toast('⏰ 定时任务到点：' + (t.label || '') + '（切回那个会话就会开口）');
+      renderTaskBar();
       return;
     }
-    firedTasks[id] = 1;
+
+    if (state.streamingId) {                    // 正在说话：顺延 30 秒
+      t.due = Date.now() + 30000;
+      t.pending = false;
+      armTask(t, sid);
+      renderTaskBar();
+      return;
+    }
+
+    firedTasks[key] = 1;
+    s.tasks = (s.tasks || []).filter(function (x) { return x && x.id !== id; });
+    persist(true);
+    renderTaskBar();
     sendCore('【定时任务提醒】' + t.prompt + '\n（这是你自己定下的时间到了，请照这个提示主动开口；不要提"定时任务"这三个字，像平常一样说话。）', [], { hidden: true });
   }
 
-  /** 会话载入时把还没到点的任务重新挂上。 */
+  /** 会话载入时把任务重新挂上；到点时人不在这个会话的，切回来立刻补触发。 */
   function restoreTasks(s) {
-    if (!s || !s.tasks || !s.tasks.length) return;
+    if (!s || !s.tasks || !s.tasks.length) { renderTaskBar(); return; }
     var keep = [];
     s.tasks.forEach(function (t) {
       if (!t || !t.due) return;
-      if (t.due <= Date.now()) {
+      if (t.due <= Date.now() && !t.pending) {
         // 错过的：超过 6 小时就不补了，免得一开应用炸一堆
         if (Date.now() - t.due < 6 * 3600 * 1000) keep.push(t);
         return;
@@ -1829,7 +1922,83 @@
       keep.push(t);
     });
     s.tasks = keep;
-    keep.forEach(armTask);
+    keep.forEach(function (t) { armTask(t, s.id); });
+    renderTaskBar();
+  }
+
+  /** 启动时把所有会话里的任务都挂上，这样即使不打开那个会话也能到点。 */
+  function armAllSessions() {
+    (state.sessions || []).forEach(function (meta) {
+      if (!meta || !meta.hasTasks) return;
+      var raw = '';
+      try { raw = Native.loadSession(meta.id); } catch (e) { raw = ''; }
+      if (!raw) return;
+      var s2 = null;
+      try { s2 = JSON.parse(raw); } catch (e) { return; }
+      if (!s2 || !s2.tasks || !s2.tasks.length) return;
+      s2.tasks.forEach(function (t) {
+        if (t && t.id && t.due && t.due > Date.now()) armTask(t, s2.id);
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- 倒计时
+
+  function pendingTasks() {
+    var s = state.cur;
+    if (!s || !s.tasks || !s.tasks.length) return [];
+    return s.tasks.filter(function (t) { return t && t.due; })
+      .sort(function (a, b) { return a.due - b.due; });
+  }
+
+  function renderTaskBar() {
+    try {
+      var list = pendingTasks();
+      var bar = $('#task-bar');
+      if (!list.length) { if (bar && bar.parentNode) bar.parentNode.removeChild(bar); return; }
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'task-bar';
+        bar.className = 'task-bar';
+        var footer = $('#composer');
+        if (footer && footer.parentNode) footer.parentNode.insertBefore(bar, footer);
+        else document.body.appendChild(bar);
+      }
+      _fillTaskBar(bar, list);
+    } catch (e) { }
+  }
+
+  function _fillTaskBar(bar, list) {
+    var t = list[0];
+    bar.innerHTML = '<span class="tb-ico">⏰</span>' +
+      '<span class="tb-label"></span>' +
+      '<span class="tb-cd" data-cd="' + t.id + '">' + fmtCd(t.due - Date.now()) + '</span>' +
+      (list.length > 1 ? '<span class="tb-more">+' + (list.length - 1) + '</span>' : '') +
+      '<button class="tb-cancel" data-cancel="' + t.id + '">取消</button>';
+    var lb = bar.querySelector('.tb-label');
+    if (lb) lb.textContent = t.label || '定时任务';
+  }
+
+  function tickTasks() {
+    var nodes = [];
+    try { nodes = document.querySelectorAll('[data-cd]') || []; } catch (e) { nodes = []; }
+    if (!nodes.length) { renderTaskBar(); return; }
+    for (var i = 0; i < nodes.length; i++) {
+      var id = nodes[i].getAttribute('data-cd');
+      var t = findTask(state.cur, id);
+      nodes[i].textContent = t ? fmtCd(t.due - Date.now()) : '已结束';
+    }
+  }
+
+  function cancelTask(id) {
+    var s = state.cur;
+    if (!s) return;
+    var key = taskKey(s.id, id);
+    if (taskTimers[key]) { clearTimeout(taskTimers[key]); delete taskTimers[key]; }
+    s.tasks = (s.tasks || []).filter(function (t) { return t && t.id !== id; });
+    persist(true);
+    renderTaskBar();
+    toast('已取消这个定时任务');
   }
 
   function regenerate(msgId) {
@@ -1918,6 +2087,10 @@
         '<div class="s-desc">' + it.desc + '</div></div>' +
         '<div class="switch' + (toolOn(s, it.key) ? ' on' : '') + '" data-tool="' + it.key + '"></div></div>';
     });
+    html += '<div class="section-title" style="margin-top:22px">对话</div>' +
+      '<div class="switch-row"><div><div class="s-label">显示时间戳</div>' +
+      '<div class="s-desc">每条消息下面显示时间；打开后模型也能看到每条消息是什么时候发的</div></div>' +
+      '<div class="switch' + (timeOn() ? ' on' : '') + '" data-meta="timestamps"></div></div>';
     html += '<div class="section-title" style="margin-top:22px">自己试一下</div>' +
       '<div class="s-desc" style="margin-bottom:10px">不经过模型，直接调原生接口，用来确认手机这一端是不是通的。</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
@@ -1947,6 +2120,15 @@
           state.probing = false;
           if (log) log.textContent = '调用失败：' + (err && err.message ? err.message : err);
         }
+        return;
+      }
+      var mt = e.target.closest('[data-meta]');
+      if (mt) {
+        var mk = mt.getAttribute('data-meta');
+        state.meta[mk] = !state.meta[mk];
+        mt.classList.toggle('on', !!state.meta[mk]);
+        saveMeta();
+        renderMessages();
         return;
       }
       var sw = e.target.closest('[data-tool]');
@@ -4389,6 +4571,7 @@
         if (meta.petPos && typeof meta.petPos === 'object') state.meta.petPos = meta.petPos;
         if (meta.usage && typeof meta.usage === 'object') state.meta.usage = meta.usage;
         if (meta.tts && typeof meta.tts === 'object') state.meta.tts = meta.tts;
+        if (typeof meta.timestamps === 'boolean') state.meta.timestamps = meta.timestamps;
       }
     } catch (e) { }
     ensurePacks();
@@ -4466,6 +4649,18 @@
       scrollW: document.documentElement.scrollWidth,
       dpr: window.devicePixelRatio || 1
     });
+
+    try {
+      armAllSessions();
+      renderTaskBar();
+      if (typeof setInterval === 'function') setInterval(tickTasks, 1000);
+      if (document.addEventListener) {
+        document.addEventListener('click', function (e) {
+          var cb = e.target && e.target.closest && e.target.closest('[data-cancel]');
+          if (cb) { e.preventDefault(); cancelTask(cb.getAttribute('data-cancel')); }
+        });
+      }
+    } catch (e) { }
 
     if (!state.providers.length) openSettings();
   }
