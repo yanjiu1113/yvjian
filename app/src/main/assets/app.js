@@ -34,6 +34,7 @@
     searchPending: null,
     toolPending: null,
     searchCount: 0,
+    voicePlaying: '',
     open: { drawer: false, settings: false, sheet: false, side: false }
   };
 
@@ -622,6 +623,21 @@
       return wrap;
     }
 
+    // 语音条
+    if (m.kind === 'voice') {
+      col.appendChild(voiceNode(m));
+      if (timeOn() && m.ts) {
+        var vt = document.createElement('div');
+        vt.className = 'msg-time';
+        vt.textContent = fmtClock(m.ts);
+        col.appendChild(vt);
+      }
+      inner.appendChild(avatarEl('assistant'));
+      inner.appendChild(col);
+      wrap.appendChild(inner);
+      return wrap;
+    }
+
     if (m.reasoning) col.appendChild(thinkNode(m));
 
     var waiting = m.streaming && !(m.content || '').trim();
@@ -1007,7 +1023,9 @@
           out.push({ role: 'user', content: tPfx + m.content });
         }
       } else if (m.role === 'assistant') {
-        if (m.content && m.content.trim() && !m.error) {
+        if (m.kind === 'voice' && m.voice && m.voice.text) {
+          out.push({ role: 'assistant', content: '（语音）' + m.voice.text });
+        } else if (m.content && m.content.trim() && !m.error) {
           out.push({ role: 'assistant', content: stripSearchDisplay(m.content) });
         }
       } else if (m.role === 'tool') {
@@ -1214,6 +1232,31 @@
     }];
   }
 
+  /** 语音条：把一句话合成成语音气泡发出去。由模型自己决定用不用。 */
+  function voiceTools() {
+    return [{
+      type: 'function',
+      function: {
+        name: 'send_voice',
+        description: '发一条语音消息（会真的响，对方点开能听见你的声音）。' +
+          '什么时候用由你判断：想说一句短的、撒娇、懒得打字、' +
+          '或者语音比文字更有感觉的时候。' +
+          '文字要口语化、短（一两句、不超过 60 字），不要带表情符号和 markdown；' +
+          '想说长内容就正常打字，别用语音念一大段。',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: {
+              type: 'string',
+              description: '你要说的话，口语化，一两句，别超过 60 字'
+            }
+          },
+          required: ['text']
+        }
+      }
+    }];
+  }
+
   /** 单个工具是否开启（细粒度开关，默认全开）。 */
   function toolOn(s, key) {
     if (!s) return true;
@@ -1310,6 +1353,7 @@
       if (names.length) list = list.concat(stickerTools(names));
     }
     if (s && toolOn(s, 'schedule_task')) list = list.concat(taskTools());
+    if (s && toolOn(s, 'send_voice')) list = list.concat(voiceTools());
     return list;
   }
 
@@ -1339,6 +1383,15 @@
           prompt: pr,
           label: parsed ? String(parsed.label || '').trim() : ''
         };
+      }
+      if (name === 'send_voice') {
+        var vtxt = parsed ? String(parsed.text || parsed.say || '').trim() : '';
+        if (!vtxt) {
+          var mv = String(raw).match(/"text"\s*:\s*"([^"]*)"/);
+          if (mv) vtxt = mv[1].trim();
+        }
+        if (vtxt) return { kind: 'voice', text: vtxt.slice(0, 200), id: t.id || '' };
+        continue;
       }
       if (DEVICE_TOOLS[name]) {
         var facing = 'back';
@@ -1839,6 +1892,110 @@
     return true;
   }
 
+  // ---------------------------------------------------------------- 语音条
+
+  /** 合成一条语音并插入气泡；合成结果由原生 onVoice 回填。 */
+  function runVoiceStep(assistantMsg, call) {
+    var s = state.cur;
+    if (!s || !call || !call.text) return false;
+    if (assistantMsg && assistantMsg.voiceSent) return false;
+    if (assistantMsg) assistantMsg.voiceSent = true;
+
+    var vm = {
+      id: uid(), role: 'assistant', kind: 'voice', ts: now(),
+      voice: { text: call.text, state: 'synth', ms: 0 }
+    };
+    s.messages.push(vm);
+    assistantMsg.streaming = false;
+    state.streamingId = null;
+    renderMessages();
+    persist(true);
+
+    try {
+      Native.voiceSynth(vm.id, call.text,
+        (state.tts && state.tts.voice) || '', (state.tts && state.tts.rate) || 1.0);
+    } catch (e) {
+      vm.voice.state = 'fail';
+      vm.voice.error = String((e && e.message) || e);
+      renderMessages();
+    }
+    dbg('voice', { id: vm.id, text: call.text.slice(0, 20) });
+    return true;
+  }
+
+  function findVoiceMsg(id) {
+    var s = state.cur;
+    if (!s) return null;
+    for (var i = s.messages.length - 1; i >= 0; i--) {
+      var m = s.messages[i];
+      if (m && m.kind === 'voice' && m.id === id) return m;
+    }
+    return null;
+  }
+
+  /** 语音气泡：宽度随时长变，点一下播放 / 再点停止。 */
+  function voiceNode(m) {
+    var v = m.voice || {};
+    var playing = state.voicePlaying === m.id;
+    var ms = Math.max(0, v.ms || 0);
+    var sec = Math.max(1, Math.round(ms / 1000));
+    var w = Math.max(96, Math.min(240, 88 + sec * 16));
+
+    var box = document.createElement('div');
+    box.className = 'voice-msg' + (v.state === 'synth' ? ' synth' : '') +
+      (v.state === 'fail' ? ' fail' : '') + (playing ? ' playing' : '');
+    box.style.width = w + 'px';
+    box.setAttribute('data-act', 'voice');
+    box.setAttribute('data-vid', m.id);
+
+    var bars = document.createElement('span');
+    bars.className = 'v-bars';
+    for (var i = 0; i < 3; i++) {
+      var b = document.createElement('i');
+      b.style.animationDelay = (i * 0.12) + 's';
+      bars.appendChild(b);
+    }
+    box.appendChild(bars);
+
+    var dur = document.createElement('span');
+    dur.className = 'v-dur';
+    if (v.state === 'synth') dur.textContent = '合成中…';
+    else if (v.state === 'fail') dur.textContent = '点一下用系统朗读';
+    else dur.textContent = sec + '″';
+    box.appendChild(dur);
+
+    box.title = v.text || '';
+    return box;
+  }
+
+  function toggleVoice(id) {
+    var m = findVoiceMsg(id);
+    if (!m) return;
+    var v = m.voice || {};
+    if (v.state === 'synth') { toast('还在合成，稍等一下'); return; }
+    if (v.state === 'fail') {
+      // 没有音频文件：退回系统 TTS 直读
+      try {
+        Native.ttsConfigure(JSON.stringify({
+          voice: state.tts.voice || '', rate: state.tts.rate || 1.0, preferApi: !!state.tts.preferApi
+        }));
+        Native.ttsSpeak(plainForSpeech(v.text || ''));
+      } catch (e) { toast('朗读失败'); }
+      return;
+    }
+    if (state.voicePlaying === id) {
+      try { Native.voiceStop(); } catch (e) { }
+      state.voicePlaying = '';
+      renderMessages();
+      return;
+    }
+    try {
+      Native.voicePlay(id);
+    } catch (e) {
+      toast('播放失败');
+    }
+  }
+
   // ---------------------------------------------------------------- 定时任务（全局调度）
   var taskTimers = {};      // 'sid:taskId' → 计时器句柄
   var firedTasks = {};      // 'sid:taskId' → 已经触发过
@@ -2065,6 +2222,7 @@
     { key: 'read_level', label: '水平仪', desc: '读取手机倾斜角，判断放得平不平' },
     { key: 'web_search', label: '联网搜索', desc: '需要先在设置里配好搜索引擎的 Key' },
     { key: 'send_sticker', label: '发表情包', desc: '关掉后模型不能再发表情（自动表情总闸也要开着）' },
+    { key: 'send_voice', label: '发语音', desc: '模型可以自己决定发一条语音气泡；需要装好 CloneTTS' },
     { key: 'schedule_task', label: '定时任务', desc: '允许模型自己定一个到点提醒；应用彻底关掉后可能丢' }
   ];
 
@@ -3924,6 +4082,38 @@
         state.pendingDevice = null;
       }
     },
+    // 语音合成结果（ok/ms/kb 或 error）
+    onVoice: function (raw) {
+      try {
+        var o = JSON.parse(raw);
+        var m = findVoiceMsg(o.id);
+        if (!m) return;
+        if (!m.voice) m.voice = {};
+        if (o.ok) {
+          m.voice.state = 'ready';
+          m.voice.ms = Number(o.ms) || 0;
+          m.voice.kb = Number(o.kb) || 0;
+        } else {
+          m.voice.state = 'fail';
+          m.voice.error = o.error || '合成失败';
+          toast('语音合成失败：' + m.voice.error);
+        }
+        renderMessages();
+        persist(true);
+      } catch (e) {
+        dbg('voice-error', { msg: String((e && e.message) || e) });
+      }
+    },
+
+    onVoicePlay: function (raw) {
+      try {
+        var o = JSON.parse(raw);
+        if (o.state === 'start') state.voicePlaying = o.id || '';
+        else state.voicePlaying = '';
+        renderMessages();
+      } catch (e) { }
+    },
+
     onChunk: function (raw) {
       var o = JSON.parse(raw);
       var m = findMessage(o.id);
@@ -3979,6 +4169,10 @@
           if (call && call.kind === 'task') {
             m.toolCalls = o.tools;
             if (runTaskStep(m, call)) return;
+          }
+          if (call && call.kind === 'voice') {
+            m.toolCalls = o.tools;
+            if (runVoiceStep(m, call)) return;
           }
           if (call && call.kind === 'sticker') {
             dbg('sticker-call', call.category + (call.pick != null ? '#' + call.pick : ''));
@@ -4504,7 +4698,15 @@
         return;
       }
       var act = e.target.closest('.mini-btn');
-      if (!act) return;
+      if (!act) {
+        // 语音气泡：点一下播放/停止
+        var vb = e.target.closest('[data-act="voice"]');
+        if (vb) {
+          e.preventDefault();
+          toggleVoice(vb.getAttribute('data-vid') || '');
+        }
+        return;
+      }
       var node = e.target.closest('.msg');
       if (!node) return;
       var id = node.dataset.id;

@@ -1762,3 +1762,48 @@ html, body { max-width: 100vw; overflow-x: hidden; }
   color: #ffc0c6;
   font-variant-numeric: tabular-nums;
 }
+/* ---------------------------------------------------------------- 语音条 */
+.voice-msg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .10);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .16s, border-color .16s, transform .12s;
+}
+.voice-msg:active { transform: scale(.985); }
+.voice-msg.playing { background: rgba(210, 86, 78, .22); border-color: rgba(210, 86, 78, .55); }
+.voice-msg.synth { opacity: .72; cursor: progress; }
+.voice-msg.fail { border-color: rgba(255, 160, 160, .45); }
+
+/* 三根跳动的竖条，静止时是一条小横线，播放时才起伏 */
+.voice-msg .v-bars { display: flex; align-items: center; gap: 3px; height: 16px; flex: 0 0 auto; }
+.voice-msg .v-bars i {
+  display: block;
+  width: 3px;
+  height: 5px;
+  border-radius: 2px;
+  background: #ff9b93;
+  transform-origin: center;
+}
+.voice-msg.playing .v-bars i { animation: vpulse .78s ease-in-out infinite; }
+.voice-msg .v-dur {
+  font-size: 13px;
+  color: #ffc0c6;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.voice-msg.synth .v-dur { color: #9a8f95; }
+.voice-msg.fail .v-dur { color: #ffb3ae; }
+
+@keyframes vpulse {
+  0%, 100% { height: 4px; }
+  50% { height: 15px; }
+}

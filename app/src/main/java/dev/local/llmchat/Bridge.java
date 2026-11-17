@@ -116,6 +116,50 @@ public class Bridge {
         deviceCall("level", () -> devices().readLevel());
     }
 
+    // ---------------------------------------------------------------- 语音条
+
+    private volatile Voice voice;
+
+    Voice voice() {
+        if (voice == null) {
+            voice = new Voice(act, pool, (method, payload) -> emit(method, payload));
+        }
+        return voice;
+    }
+
+    /** 把一段文字合成为语音文件（CloneTTS 本地接口），完成后回 onVoice。 */
+    @JavascriptInterface
+    public void voiceSynth(String id, String text, String alias, float rate) {
+        try {
+            voice().synth(id, text, alias, rate);
+        } catch (Throwable t) {
+            JSONObject p = new JSONObject();
+            try {
+                p.put("id", id);
+                p.put("ok", false);
+                p.put("error", "原生出错：" + t.getClass().getSimpleName());
+            } catch (Exception ignored) {
+            }
+            emit("onVoice", p);
+        }
+    }
+
+    @JavascriptInterface
+    public void voicePlay(String id) {
+        try {
+            voice().play(id);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @JavascriptInterface
+    public void voiceStop() {
+        try {
+            voice().stop();
+        } catch (Throwable ignored) {
+        }
+    }
+
     public Bridge(Activity a, WebView w) {
         this.act = a;
         this.web = w;
