@@ -1878,11 +1878,16 @@
     document.addEventListener('touchstart', function (e) {
       if (e.touches.length !== 1) { tracking = false; return; }
       var t = e.touches[0];
+      var tg = e.target;
+      // 输入框、可横向滚动的元素上不抢手势
+      if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) {
+        tracking = false; return;
+      }
       sx = t.clientX; sy = t.clientY;
       var el = $('#side-panel');
       var opened = !!(el && el.classList.contains('open'));
-      fromEdge = !opened && sx > window.innerWidth - 28;
-      tracking = fromEdge || (opened && sx > window.innerWidth * 0.18);
+      fromEdge = !opened && sx > window.innerWidth - 80;
+      tracking = true;
     }, { passive: true });
 
     document.addEventListener('touchend', function (e) {
@@ -1890,11 +1895,17 @@
       tracking = false;
       var t = e.changedTouches[0];
       var dx = t.clientX - sx, dy = t.clientY - sy;
-      if (Math.abs(dy) > Math.abs(dx) * 1.4) return;      // 竖滑不算
+      var adx = Math.abs(dx), ady = Math.abs(dy);
+      if (ady > adx * 1.2) return;                        // 竖滑不算
       var el = $('#side-panel');
       var opened = !!(el && el.classList.contains('open'));
-      if (!opened && fromEdge && dx < -36) { openSidePanel(); return; }
-      if (opened && dx > 62) closeSidePanel();
+      if (opened) {
+        if (dx > 70) closeSidePanel();
+        return;
+      }
+      // 从右边缘轻轻一划，或者屏幕任意位置明显往左划，都能叫出这一页
+      if (fromEdge && dx < -40) { openSidePanel(); return; }
+      if (dx < -90 && adx > ady * 1.6) openSidePanel();
     }, { passive: true });
   }
 
@@ -2129,6 +2140,7 @@
     appearance: ['头像', '聊天气泡', '聊天背景'],
     voice: ['语音朗读'],
     stickers: ['表情包'],
+    tools: ['工具'],
     about: ['数据', '诊断', '额度', '关于']
   };
 
@@ -2138,6 +2150,7 @@
     appearance: '外观',
     voice: '语音朗读',
     stickers: '表情包',
+    tools: '工具',
     about: '诊断与关于'
   };
 
@@ -2172,6 +2185,7 @@
       else if (state.tts.cloneTts) txt += ' · CloneTTS';
       return txt;
     }
+    if (key === 'tools') return toolSummary();
     if (key === 'stickers') {
       var cats = (state.stickers && state.stickers.categories) || [];
       if (!cats.length) return '未导入分类';
@@ -2182,7 +2196,7 @@
   }
 
   function buildSummaryCards() {
-    var keys = ['providers', 'search', 'appearance', 'voice', 'stickers', 'about'];
+    var keys = ['providers', 'search', 'appearance', 'voice', 'stickers', 'tools', 'about'];
     return keys.map(function (k) {
       return '<button class="set-card" data-section="' + k + '">' +
         '<div class="set-card-main">' +
