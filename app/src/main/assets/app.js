@@ -712,7 +712,7 @@
       return;
     }
 
-    s.messages.forEach(function (m) { box.appendChild(msgNode(m)); });
+    s.messages.forEach(function (m) { if (!m.hidden) box.appendChild(msgNode(m)); });
     var bgNow = state.meta.chatBackground || {};
     if (!bgNow.image && IMAGE_BG[bgNow.preset]) ensureParticles(IMAGE_BG[bgNow.preset].kind);
     scrollBottom(true);
@@ -968,6 +968,15 @@
       if (m.id === excludeId) break;
       if (m.role === 'user') {
         var hasText = !!(m.content && m.content.trim());
+        // 定时任务这类系统自己塞进来的触发语：给模型看，但明确标成"不是对方说的话"
+        if (hasText && m.hidden) {
+          out.push({
+            role: 'user',
+            content: '（下面是客户端在你设定的时间到达时自动插入的内部提醒，不是你对面的人说的话；' +
+              '按它的意思主动开口，但不要复述它、也不要当成是他说的。）\n' + m.content
+          });
+          continue;
+        }
         if (m.images && m.images.length) {
           var parts = [];
           if (hasText) parts.push({ type: 'text', text: m.content });
@@ -1344,7 +1353,7 @@
     return NEWS_HINT.test(String(q || ''));
   }
 
-  function sendCore(text, images) {
+  function sendCore(text, images, opts) {
     var s = state.cur;
     if (!s) return;
     if (state.streamingId) return;
@@ -1359,7 +1368,7 @@
     dbg('send', { web: !!s.webSearch, model: s.model, chars: (text || '').length });
 
     // 搜索只由模型通过 web_search 工具触发，客户端不再猜关键词
-    doSend(text, images, '', '');
+    doSend(text, images, '', '', opts);
   }
 
   var DEVICE_RULE =
@@ -1423,7 +1432,7 @@
     return system;
   }
 
-  function doSend(text, images, webText, webQuery) {
+  function doSend(text, images, webText, webQuery, opts) {
     var s = state.cur;
     if (!s) return;
     if (state.streamingId) return;
@@ -1434,7 +1443,8 @@
       id: uid(), role: 'user', content: text || '', images: images || [], ts: now(),
       web: !!webText, webQuery: webQuery || ''
     };
-    var isFirstUser = !s.messages.some(function (m) { return m.role === 'user'; });
+    var isFirstUser = !s.messages.some(function (m) { return m.role === 'user' && !m.hidden; });
+    if (opts && opts.hidden) um.hidden = true;   // 只给模型看，不画进界面
     s.messages.push(um);
     if (isFirstUser && (!s.title || s.title === '新会话')) s.title = autoTitle(text);
 
@@ -1773,20 +1783,26 @@
     return true;
   }
 
+  var taskTimers = {};      // id → 计时器句柄（防同一任务被 arm 两次）
+  var firedTasks = {};      // id → 已经触发过
+
   function armTask(t) {
+    if (!t || !t.id) return;
     var left = t.due - Date.now();
     if (left < 0) left = 0;
-    clearTimeout(t._timer);
-    t._timer = setTimeout(function () { fireTask(t.id); }, Math.min(left, 2147483000));
+    if (taskTimers[t.id]) { clearTimeout(taskTimers[t.id]); delete taskTimers[t.id]; }
+    taskTimers[t.id] = setTimeout(function () { delete taskTimers[t.id]; fireTask(t.id); }, Math.min(left, 2147483000));
   }
 
-  /** 到点了：插一条提醒，让模型自己开口。 */
+  /** 到点了：让模型自己开口。这条触发文本只进上下文，不显示成"我"说的话。 */
   function fireTask(id) {
     var s = state.cur;
     if (!s) return;
+    if (firedTasks[id]) return;         // 同一任务只触发一次
     var t = null;
     for (var i = 0; i < (s.tasks || []).length; i++) if (s.tasks[i].id === id) t = s.tasks[i];
     if (!t) return;
+    if (taskTimers[id]) { clearTimeout(taskTimers[id]); delete taskTimers[id]; }
     s.tasks = (s.tasks || []).filter(function (x) { return x.id !== id; });
     persist(true);
     if (state.streamingId) {   // 正在说话就顺延 30 秒
@@ -1795,14 +1811,8 @@
       armTask(t);
       return;
     }
-    var um = {
-      id: uid(), role: 'user', auto: true, ts: now(),
-      content: '【定时任务提醒】' + t.prompt + '\n（这是你自己定下的时间到了，请照这个提示主动开口；不要提"定时任务"这三个字，像平常一样说话。）'
-    };
-    s.messages.push(um);
-    renderMessages();
-    persist(true);
-    sendCore(um.content, []);
+    firedTasks[id] = 1;
+    sendCore('【定时任务提醒】' + t.prompt + '\n（这是你自己定下的时间到了，请照这个提示主动开口；不要提"定时任务"这三个字，像平常一样说话。）', [], { hidden: true });
   }
 
   /** 会话载入时把还没到点的任务重新挂上。 */
