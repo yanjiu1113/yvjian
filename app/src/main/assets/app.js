@@ -33,7 +33,7 @@
     searchPending: null,
     toolPending: null,
     searchCount: 0,
-    open: { drawer: false, settings: false, sheet: false }
+    open: { drawer: false, settings: false, sheet: false, side: false }
   };
 
   // ---------------------------------------------------------------- helpers
@@ -271,8 +271,11 @@
       stream: true,
       webSearch: false,
       stickerAuto: false,
+      deviceTools: true,
       petLink: false,
       autoRead: false,
+      toolOn: {},
+      tasks: [],
       messages: []
     };
   }
@@ -325,7 +328,12 @@
 
     if (s.webSearch == null) s.webSearch = false;
     if (s.stickerAuto == null) s.stickerAuto = false;
+    if (s.deviceTools == null) s.deviceTools = true;
+    if (!s.toolOn) s.toolOn = {};
+    if (!s.tasks) s.tasks = [];
     state.cur = s;
+    state.stickerPick = null;
+    restoreTasks(s);
     lsSet(K_LAST, s.id);
     // heal a session that points at a provider which no longer exists
     resolveProvider(s);
@@ -517,16 +525,45 @@
     var tag = document.createElement('div');
     tag.className = 'role-tag';
 
-    // 搜索工具卡片
+    // 工具卡片（搜索 / 手机设备）
     if (m.role === 'tool') {
       wrap.className = 'msg tool';
       var card = document.createElement('div');
       card.className = 'tool-card' + (m.pending ? ' pending' : '');
-      var head = m.pending ? '🔍 正在搜索「' + esc(m.query || '') + '」…'
-        : (m.error ? '🔍 搜索「' + esc(m.query || '') + '」失败'
-          : '🔍 搜索「' + esc(m.query || '') + '」' +
-            (m.engine ? ' · ' + esc(ENGINE_NAMES[m.engine] || m.engine) : ''));
+      var DEV_ICON = { photo: '📷', compass: '🧭', level: '📐', sticker: '🖼️', task: '⏰' };
+      var DEV_NAME = { photo: '拍照', compass: '指南针', level: '水平仪', sticker: '表情包', task: '定时任务' };
+      var head;
+      if (m.device) {
+        var ic = DEV_ICON[m.device] || '📱';
+        var nm = DEV_NAME[m.device] || '设备';
+        head = m.pending ? (ic + ' 正在读取' + nm + '…')
+          : (m.error ? (ic + ' ' + nm + '失败') : (ic + ' ' + nm));
+      } else {
+        head = m.pending ? '🔍 正在搜索「' + esc(m.query || '') + '」…'
+          : (m.error ? '🔍 搜索「' + esc(m.query || '') + '」失败'
+            : '🔍 搜索「' + esc(m.query || '') + '」' +
+              (m.engine ? ' · ' + esc(ENGINE_NAMES[m.engine] || m.engine) : ''));
+      }
       card.innerHTML = '<div class="tool-head">' + head + '</div>';
+      if (m.images && m.images.length) {
+        if (m.device === 'sticker' && m.images.length > 1) {
+          var picks = document.createElement('div');
+          picks.className = 'tool-picks';
+          m.images.forEach(function (u, i) {
+            var im = document.createElement('img');
+            im.className = 'tool-pick';
+            im.src = u;
+            im.title = '候选 ' + i;
+            picks.appendChild(im);
+          });
+          card.appendChild(picks);
+        } else {
+          var shot = document.createElement('img');
+          shot.className = 'tool-shot';
+          shot.src = m.images[0];
+          card.appendChild(shot);
+        }
+      }
       if (!m.pending && m.content) {
         var det = document.createElement('details');
         det.innerHTML = '<summary>查看结果</summary><pre class="tres"></pre>';
@@ -929,6 +966,24 @@
         }
       } else if (m.role === 'tool') {
         if (m.pending) continue;
+        if (m.device) {
+          var dLabel = { photo: '【照片】', compass: '【指南针】', level: '【水平仪】' }[m.device] || '【设备结果】';
+          var dBody = m.error ? ('失败：' + m.error) : (m.content && m.content.trim() ? m.content : '（没有数据）');
+          if (m.images && m.images.length) {
+            var dParts = [{
+              type: 'text',
+              text: dLabel + '\n' + dBody + '\n\n这是刚刚拍到的画面，请直接看图片内容回答，不要说你打不开图片。'
+            }];
+            m.images.forEach(function (u) { dParts.push({ type: 'image_url', image_url: { url: u } }); });
+            out.push({ role: 'user', content: dParts });
+          } else {
+            out.push({
+              role: 'user',
+              content: dLabel + '\n' + dBody + '\n\n请基于上面的读数回答，不要说你没有传感器。'
+            });
+          }
+          continue;
+        }
         var text = m.error ? ('搜索失败：' + m.error) : (m.content && m.content.trim() ? m.content : '（没有搜到结果）');
         out.push({
           role: 'user',
@@ -1043,7 +1098,8 @@
     if (!names.length) {
       var packs = state.meta.stickerPacks || [];
       for (var j = 0; j < packs.length; j++) {
-        if (packs[j].stickers && packs[j].stickers.length) names.push(packs[j].name);
+        // 兜底分支同样不暴露「默认」
+        if (packs[j].name !== '默认' && packs[j].stickers && packs[j].stickers.length) names.push(packs[j].name);
       }
     }
     return names;
@@ -1067,6 +1123,11 @@
               type: 'string',
               description: '情绪分类名，只能从以下列表里选一个（原样输出，不要加引号或解释）：' +
                 names.join('、')
+            },
+            pick: {
+              type: 'integer',
+              description: '可选。上一轮系统把该分类的候选图发给你之后，用 0 开始的编号指定你到底要发哪一张。' +
+                '没有收到候选图时不要填。'
             }
           },
           required: ['category']
@@ -1075,18 +1136,109 @@
     }];
   }
 
+  /** 后台任务：模型自己决定要不要设、设多久、到点做什么。 */
+  function taskTools() {
+    return [{
+      type: 'function',
+      function: {
+        name: 'schedule_task',
+        description: '设一个定时任务：到时间后你会收到一条提醒性消息，然后由你主动开口。' +
+          '适合「十分钟后提醒我喝水」「半小时后问他到家没有」「明早跟我说早安」这类。' +
+          '要不要用、隔多久、到点说什么，都由你决定；不需要定时的闲聊就别调。' +
+          '注意任务只在应用还开着的时候有效（关掉应用可能会丢）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            delay_seconds: {
+              type: 'integer',
+              description: '多少秒之后触发，最小 30，最长 86400（一天）'
+            },
+            prompt: {
+              type: 'string',
+              description: '到点后你自己要做什么，用第一人称写给自己看，例如「提醒他喝水，语气温柔一点」'
+            },
+            label: {
+              type: 'string',
+              description: '给对方看的简短说明，例如「10 分钟后提醒喝水」'
+            }
+          },
+          required: ['delay_seconds', 'prompt']
+        }
+      }
+    }];
+  }
+
+  /** 单个工具是否开启（细粒度开关，默认全开）。 */
+  function toolOn(s, key) {
+    if (!s) return true;
+    var t = s.toolOn || {};
+    return t[key] !== false;
+  }
+
+  /** 手机硬件工具：拍照、指南针、水平仪。由模型自己判断什么时候用。 */
+  function deviceTools(s) {
+    var all = [
+      {
+        type: 'function',
+        function: {
+          name: 'take_photo',
+          description: '调用手机摄像头拍一张照片，拍完你能直接看到画面。' +
+            '什么时候用由你判断：想知道对方现在的样子、周围环境、手上的东西、纸上的字，' +
+            '或者对话情境里"看一眼"本身就成立的时候，都可以主动调用。' +
+            '重要：调用前必须先在正文里问一句（例如「我想看看你，可以吗」「拍一张给我看好不好」），' +
+            '等对方明确同意后再调用；没问就问会直接被拒绝。' +
+            '注意它会真的打开相机、占用对方几秒，没必要时别连着用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              facing: {
+                type: 'string',
+                enum: ['back', 'front'],
+                description: 'back = 后置（拍眼前的东西、环境、纸面）；front = 前置（自拍、拍对方的脸）。默认 back。'
+              }
+            },
+            required: []
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'read_compass',
+          description: '读取手机朝向（指南针）：方位角 0-360 度、十六方位中文名、俯仰与横滚。' +
+            '方向本身有意义时（想知道对方朝哪、在路上、面朝什么）就调用，不必等对方明确要求。',
+          parameters: { type: 'object', properties: {}, required: [] }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'read_level',
+          description: '读取手机倾角（水平仪）：俯仰、横滚、最大倾斜角，以及是否接近水平。' +
+            '判断"放平了没有 / 有多斜"这类事情时调用。',
+          parameters: { type: 'object', properties: {}, required: [] }
+        }
+      }
+    ];
+    return all.filter(function (t) { return toolOn(s, t['function'].name); });
+  }
+
+  var DEVICE_TOOLS = { take_photo: 'photo', read_compass: 'compass', read_level: 'level' };
+
   /** 本轮要声明给模型的工具。 */
   function chatTools(s, allowSearch) {
     var list = [];
-    if (s && allowSearch) list = list.concat(searchTools());
+    if (s && allowSearch && toolOn(s, 'web_search')) list = list.concat(searchTools());
+    if (s && s.deviceTools && toolOn(s, 'take_photo')) list = list.concat(deviceTools(s));
     if (s && s.stickerAuto) {
       var names = stickerCategoryNames();
       if (names.length) list = list.concat(stickerTools(names));
     }
+    if (s && toolOn(s, 'schedule_task')) list = list.concat(taskTools());
     return list;
   }
 
-  /** 解析 tool_calls，返回 {kind:'search',query,id} / {kind:'sticker',category,id} / null。 */
+  /** 解析 tool_calls，返回 {kind:'search'|'sticker'|'device', ...} / null。 */
   function parseToolCall(tools) {
     if (!tools || !tools.length) return null;
     for (var i = 0; i < tools.length; i++) {
@@ -1099,13 +1251,36 @@
       } catch (e) {
         parsed = null;
       }
+      if (name === 'schedule_task') {
+        var secs = parsed ? Number(parsed.delay_seconds) : 0;
+        var pr = parsed ? String(parsed.prompt || '').trim() : '';
+        if (!secs || secs < 30 || !pr) {
+          // 参数不完整时不弹错，交给后面正常文字回复
+          return null;
+        }
+        return {
+          kind: 'task', id: t.id || '',
+          seconds: Math.min(86400, Math.round(secs)),
+          prompt: pr,
+          label: parsed ? String(parsed.label || '').trim() : ''
+        };
+      }
+      if (DEVICE_TOOLS[name]) {
+        var facing = 'back';
+        if (parsed && String(parsed.facing || '').toLowerCase() === 'front') facing = 'front';
+        return { kind: 'device', name: name, dev: DEVICE_TOOLS[name], id: t.id || '', facing: facing };
+      }
       if (name === 'send_sticker') {
         var cat = parsed ? String(parsed.category || '').trim() : '';
         if (!cat) {
           var mc = String(raw).match(/"category"\s*:\s*"([^"]*)"/);
           if (mc) cat = mc[1].trim();
         }
-        if (cat) return { kind: 'sticker', category: cat, id: t.id || '' };
+        if (cat) return {
+          kind: 'sticker', category: cat, id: t.id || '',
+          pick: parsed && parsed.pick !== undefined && parsed.pick !== null && parsed.pick !== ''
+            ? Number(parsed.pick) : null
+        };
         continue;
       }
       if (name === 'web_search' || name === '') {
@@ -1310,6 +1485,119 @@
     return true;
   }
 
+  /** 上一轮对方说的话里有没有「同意」的意思（拍照前的口头许可）。 */
+  function lastUserSaidYes() {
+    var s = state.cur;
+    if (!s) return false;
+    for (var i = s.messages.length - 1; i >= 0; i--) {
+      var m = s.messages[i];
+      if (m.role !== 'user') continue;
+      var t = String(m.content || '').trim();
+      if (!t) continue;
+      if (/不|别|不要|不想|拒绝|算了/.test(t)) return false;
+      return /(可以|行|好|嗯|同意|让你看|给你看|看吧|拍吧|拍一张|没问题|当然|来吧|ok)/i.test(t);
+    }
+    return false;
+  }
+
+  /** 模型调用了手机硬件工具：交给原生去取数据，回来再让它接着写。 */
+  function runDeviceStep(assistantMsg, call) {
+    var s = state.cur;
+    if (!s) return false;
+    var api = { photo: 'takePhoto', compass: 'readCompass', level: 'readLevel' }[call.dev];
+    if (!api || typeof Native[api] !== 'function') {
+      toast('这个版本还不支持' + (call.name || '该工具'));
+      return false;
+    }
+
+    // 拍照必须先问过、并且对方答应了。没问就先把「去问」这件事回给它。
+    if (call.dev === 'photo' && !lastUserSaidYes()) {
+      var deny = {
+        id: uid(), role: 'tool', content: '', device: 'photo', ts: now(), pending: false,
+        error: '被拦下了：你还没问对方是否同意。先在正文里问一句「我想看看你，可以吗」，等对方回答后再调用 take_photo。'
+      };
+      s.messages.push(deny);
+      assistantMsg.streaming = false;
+      state.streamingId = null;
+      renderMessages();
+      renderComposer();
+      persist(true);
+      continueAfterSearch();
+      return true;
+    }
+
+    var tool = {
+      id: uid(), role: 'tool', content: '', device: call.dev, ts: now(), pending: true
+    };
+    s.messages.push(tool);
+    assistantMsg.streaming = false;
+    state.streamingId = null;
+    state.pendingDevice = { toolId: tool.id, assistantId: assistantMsg.id, dev: call.dev };
+
+    renderMessages();
+    renderComposer();
+    persist(true);
+    dbg('device-start', { dev: call.dev });
+    if (call.dev === 'photo') toast('正在打开相机…');
+
+    try {
+      if (call.dev === 'photo' && typeof Native.takePhoto2 === 'function') Native.takePhoto2(call.facing || 'back');
+      else Native[api]();
+    } catch (e) {
+      state.pendingDevice = null;
+      tool.pending = false;
+      tool.error = '设备调用失败：' + (e && e.message ? e.message : e);
+      renderMessages();
+      continueAfterSearch();
+    }
+    return true;
+  }
+
+  /** 原生把拍照/传感器结果送回来。 */
+  window.__bridge = window.__bridge || {};
+  window.__bridge.onDevice = function (raw) {
+    var o;
+    try {
+      o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch (e) {
+      o = { kind: 'level', error: '返回数据解析失败' };
+    }
+    var pd = state.pendingDevice;
+    state.pendingDevice = null;
+    var s = state.cur;
+    var tool = pd && s ? findMessage(pd.toolId) : null;
+    if (tool) {
+      tool.pending = false;
+      tool.device = o.kind || (pd && pd.dev) || 'level';
+      if (o.dataUrl) {
+        tool.images = [o.dataUrl];
+        tool.content = describeDevice(o);
+      } else {
+        tool.content = describeDevice(o);
+      }
+      if (o.error) {
+        tool.error = o.error;
+        tool.content = '';
+      }
+    }
+    dbg('device-done', { kind: o.kind, err: o.error || '', kb: o.kb || 0 });
+    renderMessages();
+    persist(true);
+    continueAfterSearch();
+  };
+
+  function describeDevice(o) {
+    if (o.error) return '';
+    if (o.kind === 'photo') return '已拍照 ' + o.w + '×' + o.h + '（' + o.kb + ' KB）';
+    if (o.kind === 'compass') {
+      return '朝向 ' + o.dir + '（' + o.azimuth + '°），俯仰 ' + o.pitch + '°，横滚 ' + o.roll + '°';
+    }
+    if (o.kind === 'level') {
+      return '倾斜 ' + o.tilt + '°（俯仰 ' + o.pitch + '°，横滚 ' + o.roll + '°）' + (o.flat ? '，接近水平' : '');
+    }
+    return '完成';
+  }
+
   /** 搜索结束后，把结果塞进历史，再让模型接着写。 */
   function continueAfterSearch() {
     var s = state.cur;
@@ -1378,6 +1666,90 @@
     persist(true);
   }
 
+  // ---------------------------------------------------------------- 后台任务
+
+  function fmtDur(sec) {
+    if (sec < 60) return sec + ' 秒';
+    if (sec < 3600) return Math.round(sec / 60) + ' 分钟';
+    return (sec / 3600).toFixed(1).replace('.0', '') + ' 小时';
+  }
+
+  function runTaskStep(assistantMsg, call) {
+    var s = state.cur;
+    if (!s) return false;
+    if (!s.tasks) s.tasks = [];
+    var t = {
+      id: uid(),
+      due: Date.now() + call.seconds * 1000,
+      prompt: call.prompt,
+      label: call.label || ('约 ' + fmtDur(call.seconds) + '后')
+    };
+    s.tasks.push(t);
+    armTask(t);
+
+    var tool = {
+      id: uid(), role: 'tool', device: 'task', ts: now(), pending: false,
+      content: '已安排：' + t.label + '（' + fmtDur(call.seconds) + '后）'
+    };
+    s.messages.push(tool);
+    assistantMsg.streaming = false;
+    state.streamingId = null;
+    renderMessages();
+    renderComposer();
+    persist(true);
+    continueAfterSearch();
+    return true;
+  }
+
+  function armTask(t) {
+    var left = t.due - Date.now();
+    if (left < 0) left = 0;
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () { fireTask(t.id); }, Math.min(left, 2147483000));
+  }
+
+  /** 到点了：插一条提醒，让模型自己开口。 */
+  function fireTask(id) {
+    var s = state.cur;
+    if (!s) return;
+    var t = null;
+    for (var i = 0; i < (s.tasks || []).length; i++) if (s.tasks[i].id === id) t = s.tasks[i];
+    if (!t) return;
+    s.tasks = (s.tasks || []).filter(function (x) { return x.id !== id; });
+    persist(true);
+    if (state.streamingId) {   // 正在说话就顺延 30 秒
+      t.due = Date.now() + 30000;
+      s.tasks.push(t);
+      armTask(t);
+      return;
+    }
+    var um = {
+      id: uid(), role: 'user', auto: true, ts: now(),
+      content: '【定时任务提醒】' + t.prompt + '\n（这是你自己定下的时间到了，请照这个提示主动开口；不要提"定时任务"这三个字，像平常一样说话。）'
+    };
+    s.messages.push(um);
+    renderMessages();
+    persist(true);
+    sendCore(um.content, []);
+  }
+
+  /** 会话载入时把还没到点的任务重新挂上。 */
+  function restoreTasks(s) {
+    if (!s || !s.tasks || !s.tasks.length) return;
+    var keep = [];
+    s.tasks.forEach(function (t) {
+      if (!t || !t.due) return;
+      if (t.due <= Date.now()) {
+        // 错过的：超过 6 小时就不补了，免得一开应用炸一堆
+        if (Date.now() - t.due < 6 * 3600 * 1000) keep.push(t);
+        return;
+      }
+      keep.push(t);
+    });
+    s.tasks = keep;
+    keep.forEach(armTask);
+  }
+
   function regenerate(msgId) {
     var s = state.cur;
     if (!s || state.streamingId) return;
@@ -1435,6 +1807,97 @@
     syncOverlay();
   }
 
+  /** 工具开关面板：逐项控制模型能调用什么。 */
+  var TOOL_ITEMS = [
+    { key: 'take_photo', label: '拍照', desc: '模型会先在正文里问你「可以吗」，你答应后才会打开相机；前后置由它自己选' },
+    { key: 'read_compass', label: '指南针', desc: '读取手机朝向，回一个方向名 + 角度' },
+    { key: 'read_level', label: '水平仪', desc: '读取手机倾斜角，判断放得平不平' },
+    { key: 'web_search', label: '联网搜索', desc: '需要先在设置里配好搜索引擎的 Key' },
+    { key: 'send_sticker', label: '发表情包', desc: '关掉后模型不能再发表情（自动表情总闸也要开着）' },
+    { key: 'schedule_task', label: '定时任务', desc: '允许模型自己定一个到点提醒；应用彻底关掉后可能丢' }
+  ];
+
+  /** 一行摘要，给设置页显示。 */
+  function toolSummary() {
+    var s = state.cur;
+    if (!s) return '（没有会话）';
+    var onNames = TOOL_ITEMS.filter(function (it) { return toolOn(s, it.key); })
+      .map(function (it) { return it.label; });
+    return onNames.length ? onNames.join('、') : '全部关闭';
+  }
+
+  function openToolSheet() {
+    var s = state.cur;
+    if (!s) return;
+    var html = '<div class="section-title" style="margin-top:0">工具</div>' +
+      '<div class="s-desc" style="margin-bottom:12px">关掉的工具，模型连它的存在都看不到。</div>';
+    TOOL_ITEMS.forEach(function (it) {
+      html += '<div class="switch-row"><div><div class="s-label">' + it.label + '</div>' +
+        '<div class="s-desc">' + it.desc + '</div></div>' +
+        '<div class="switch' + (toolOn(s, it.key) ? ' on' : '') + '" data-tool="' + it.key + '"></div></div>';
+    });
+    html += '<button class="btn primary block" id="ts-done" style="margin-top:16px">完成</button>';
+    openSheet(html);
+
+    var body = $('#sheet-body');
+    body.addEventListener('click', function (e) {
+      var sw = e.target.closest('[data-tool]');
+      if (!sw) return;
+      var k = sw.getAttribute('data-tool');
+      if (!s.toolOn) s.toolOn = {};
+      s.toolOn[k] = !toolOn(s, k);
+      sw.classList.toggle('on', toolOn(s, k));
+      persist(true);
+    });
+    $('#ts-done').addEventListener('click', function () { closeSheet(); });
+  }
+
+  // ------------------------------------------------------- 右侧滑出页（先留白）
+
+  function openSidePanel() {
+    var el = $('#side-panel');
+    if (!el) return;
+    el.classList.add('open');
+    el.setAttribute('aria-hidden', 'false');
+    state.open.side = true;
+  }
+
+  function closeSidePanel() {
+    var el = $('#side-panel');
+    if (!el) return;
+    el.classList.remove('open');
+    el.setAttribute('aria-hidden', 'true');
+    state.open.side = false;
+  }
+
+  function bindSidePanel() {
+    var closeBtn = $('#side-panel-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeSidePanel);
+
+    var sx = 0, sy = 0, tracking = false, fromEdge = false;
+    document.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) { tracking = false; return; }
+      var t = e.touches[0];
+      sx = t.clientX; sy = t.clientY;
+      var el = $('#side-panel');
+      var opened = !!(el && el.classList.contains('open'));
+      fromEdge = !opened && sx > window.innerWidth - 28;
+      tracking = fromEdge || (opened && sx > window.innerWidth * 0.18);
+    }, { passive: true });
+
+    document.addEventListener('touchend', function (e) {
+      if (!tracking) return;
+      tracking = false;
+      var t = e.changedTouches[0];
+      var dx = t.clientX - sx, dy = t.clientY - sy;
+      if (Math.abs(dy) > Math.abs(dx) * 1.4) return;      // 竖滑不算
+      var el = $('#side-panel');
+      var opened = !!(el && el.classList.contains('open'));
+      if (!opened && fromEdge && dx < -36) { openSidePanel(); return; }
+      if (opened && dx > 62) closeSidePanel();
+    }, { passive: true });
+  }
+
   function openSheet(html) {
     $('#sheet-body').innerHTML = html;
     $('#sheet').classList.add('open');
@@ -1453,6 +1916,7 @@
   }
 
   function closeTop() {
+    if (state.open.side) { closeSidePanel(); return true; }
     if (state.open.sheet) { closeSheet(); return true; }
     if (state.open.settings) { closeSettings(); return true; }
     if (state.open.drawer) { closeDrawer(); return true; }
@@ -1991,6 +2455,13 @@
       '<div class="muted" style="margin-top:9px">余额接口只支持 DeepSeek、OpenRouter 和 one-api 系中转；' +
       '其他服务商查询会提示不支持（token 统计不受影响）。</div>' +
       '</div>' +
+      '<div class="section-title">工具</div>' +
+      '<div class="card">' +
+      '<div class="row between"><div><div class="s-label">模型可调用的能力</div>' +
+      '<div class="s-desc">逐项开关，关掉后模型看不到这个工具</div></div>' +
+      '<button class="btn small" data-act="tools">逐项设置</button></div>' +
+      '<div class="muted" style="margin-top:10px">当前：' + toolSummary() + '</div>' +
+      '</div>' +
       '<div class="section-title">关于</div>' +
       '<div class="card"><div class="muted">语见 3.39 · 本地 WebView 界面 + 原生 HTTP 层。<br>' +
       '客户端不做内容审查、不注入审查提示词、不改写你的消息；模型与服务端自身的策略不受本应用控制。</div></div>';
@@ -2227,7 +2698,12 @@
       '<div class="switch-row"><div><div class="s-label">情趣联动</div>' +
       '<div class="s-desc">开启后模型可用隐藏指令控制情趣版里的设备（内容对聊天不可见）</div></div>' +
       '<div class="switch' + (s.petLink ? ' on' : '') + '" id="ms-pet"></div></div>' +
-      '<div class="row" style="margin-top:10px"><button class="btn small" id="ms-packs">管理表情包分类</button></div>' +
+      '<div class="switch-row"><div><div class="s-label">手机工具</div>' +
+      '<div class="s-desc">允许模型拍照、读指南针和水平仪；拍到的照片会作为一条消息发给模型</div></div>' +
+      '<div class="switch' + (s.deviceTools !== false ? ' on' : '') + '" id="ms-device"></div></div>' +
+      '<div class="row" style="margin-top:10px"><button class="btn small" id="ms-tools">工具开关（逐项）</button>' +
+      '<button class="btn small" id="ms-packs">管理表情包分类</button></div>' +
+      '<div class="s-desc" style="margin-top:6px">逐项开关在「设置 → 工具」里；这一行只是总闸。</div>' +
 
       '<div class="field" style="margin-top:14px"><label>系统提示词（默认留空，应用不预置任何内容）</label>' +
       '<textarea id="ms-sys" placeholder="留空则不发送 system 消息">' + esc(s.system || '') + '</textarea></div>' +
@@ -2235,6 +2711,8 @@
     );
 
     $('#ms-manage').addEventListener('click', function () { closeSheet(); openSettings(); });
+    var msTools = $('#ms-tools');
+    if (msTools) msTools.addEventListener('click', function () { openToolSheet(); });
     $('#ms-done').addEventListener('click', function () {
       s.system = $('#ms-sys').value;
       persist(true);
@@ -2357,6 +2835,15 @@
       this.classList.toggle('on', s2.petLink);
       persist(true);
       toast(s2.petLink ? '情趣联动已开启' : '情趣联动已关闭');
+    });
+
+    $('#ms-device').addEventListener('click', function () {
+      var s2 = state.cur;
+      if (!s2) return;
+      s2.deviceTools = !(s2.deviceTools !== false);
+      this.classList.toggle('on', s2.deviceTools);
+      persist(true);
+      toast(s2.deviceTools ? '手机工具已开启' : '手机工具已关闭');
     });
 
     $('#ms-packs').addEventListener('click', function () {
@@ -2717,6 +3204,104 @@
     return false;
   }
   /** 按分类发一张：文件夹模式走原生随机取图，旧槽位模式直接用 base64。 */
+  /** 把一张表情压成小缩略图，避免为了选图把原图整批发给模型。 */
+  function thumbOf(url, cb) {
+    var img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = function () {
+      try {
+        var s = 132 / Math.min(img.width, img.height);
+        var w = Math.max(1, Math.round(img.width * Math.min(s, 1)));
+        var h = Math.max(1, Math.round(img.height * Math.min(s, 1)));
+        var c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        var g = c.getContext('2d');
+        g.fillStyle = '#ffffff';
+        g.fillRect(0, 0, w, h);
+        g.drawImage(img, 0, 0, w, h);
+        cb(c.toDataURL('image/jpeg', 0.72));
+      } catch (e) {
+        cb(null);
+      }
+    };
+    img.onerror = function () { cb(null); };
+    img.src = url;
+  }
+
+  /**
+   * 发一张表情。有识图能力的模型会先拿到该分类的候选缩略图，
+   * 由它自己挑（下一次调用带 pick 下标）；挑不出来才退回随机。
+   */
+  function runStickerStep(assistantMsg, call) {
+    var s = state.cur;
+    if (!s) return false;
+    var raw = String(call.category || '').trim();
+    if (!raw) return false;
+
+    var folderCats = (state.stickers && state.stickers.categories) || [];
+    var hit = matchCategory(raw, folderCats);
+
+    // ① 模型已经给了编号：直接发那张
+    var pend = state.stickerPick;
+    if (call.pick != null && pend && pend.category === (hit ? hit.name : raw) &&
+        pend.urls[call.pick]) {
+      var url0 = pend.urls[call.pick];
+      state.stickerPick = null;
+      pushStickerMessage(url0);
+      return false;   // 让本轮正常收尾
+    }
+
+    // ② 还没选过：把候选图丢给它看
+    if (hit && call.pick == null && !pend) {
+      var p = typeof state.meta.stickerProb[hit.name] === 'number' ? state.meta.stickerProb[hit.name] : 100;
+      if (Math.random() * 100 >= p) return false;
+      var files = [];
+      try { files = JSON.parse(Native.listStickerFiles(hit.name) || '[]'); } catch (e) { files = []; }
+      if (!files.length) return false;
+      var pickList = files.slice(0, 4);
+      assistantMsg.streaming = false;
+      state.streamingId = null;
+      var toolMsg = { id: uid(), role: 'tool', content: '', device: 'sticker', ts: now(), pending: true, images: [] };
+      s.messages.push(toolMsg);
+      renderMessages();
+      persist(true);
+
+      var urls = pickList.map(function (f) { return f.url; });
+      var want = pickList.length;
+      var got = 0;
+      var thumbs = [];
+      urls.forEach(function (u, i) {
+        thumbOf(u, function (d) {
+          thumbs[i] = d || u;
+          got++;
+          if (got < want) return;
+          toolMsg.pending = false;
+          toolMsg.images = thumbs.filter(Boolean);
+          toolMsg.content = '分类「' + hit.name + '」的 ' + want + ' 张候选图，编号 0 到 ' + (want - 1) +
+            '。挑一张最贴合当前气氛的，再调一次 send_sticker，category 填「' + hit.name + '」，pick 填编号。';
+          state.stickerPick = { category: hit.name, urls: urls };
+          renderMessages();
+          persist(true);
+          continueAfterSearch();
+        });
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /** 直接把某个 URL 作为表情消息插入对话。 */
+  function pushStickerMessage(url) {
+    var s = state.cur;
+    if (!s || !url) return;
+    s.messages.push({
+      id: uid(), role: 'assistant', kind: 'sticker',
+      sticker: url, ts: now(), model: s.model
+    });
+    renderMessages();
+    persist(true);
+  }
+
   function sendStickerByCategory(cat) {
     var s = state.cur;
     if (!s) return false;
@@ -3058,17 +3643,26 @@
       if (m) {
         m.streaming = false;
 
-        // ① 原生 tool_calls（搜索 / 发表情）
+        // ① 原生 tool_calls（搜索 / 发表情 / 手机硬件）
         if (!m.error && o.tools && o.tools.length) {
           var call = parseToolCall(o.tools);
           if (call && call.kind === 'search' && state.cur && state.cur.webSearch) {
             m.toolCalls = o.tools;
             if (runSearchStep(m, call.query, call.id)) return;
           }
+          if (call && call.kind === 'device') {
+            m.toolCalls = o.tools;
+            if (runDeviceStep(m, call)) return;
+          }
+          if (call && call.kind === 'task') {
+            m.toolCalls = o.tools;
+            if (runTaskStep(m, call)) return;
+          }
           if (call && call.kind === 'sticker') {
-            dbg('sticker-call', call.category);
+            dbg('sticker-call', call.category + (call.pick != null ? '#' + call.pick : ''));
             m.stickerRequested = true;
-            if (sendStickerByCategory(call.category)) {
+            if (runStickerStep(m, call)) return;
+            if (sendStickerByCategory(call.category) || state.lastStickerSent) {
               m.stickerSent = true;
             }
           }
@@ -3238,10 +3832,11 @@
         var pack = packById(tag.slice(8));
         if (!pack) return;
         if (pack.stickers.length >= MAX_PACK_STICKERS) { toast('这一栏最多 ' + MAX_PACK_STICKERS + ' 张'); return; }
-        pack.stickers.push(o.dataUrl);
+        // 原生对表情包是原文件直存（GIF 才动），优先用 URL；老路径才会给 dataUrl
+        pack.stickers.push(o.url || o.dataUrl);
         saveMeta();
         if (state.open.sheet) openStickerSheet();
-        toast('已加入「' + pack.name + '」');
+        toast('已加入「' + pack.name + '」' + (o.gif ? '（GIF）' : ''));
       }
     },
 
@@ -3361,6 +3956,7 @@
 
   function bind() {
     $('#btn-menu').addEventListener('click', openDrawer);
+    bindSidePanel();
     var petBtn = $('#btn-pet');
     if (petBtn) {
       petBtn.addEventListener('click', function () {
@@ -3503,7 +4099,8 @@
         refreshSection();
         renderMessages();
         return;
-      }      if (act === 'sticker-manage') { closeSettings(); openStickerSheet(); return; }
+      }      if (act === 'tools') { openToolSheet(); return; }
+      if (act === 'sticker-manage') { closeSettings(); openStickerSheet(); return; }
       if (act === 'sticker-import') { Native.importStickers(); return; }
       if (act === 'tts-settings') { Native.openTtsSettings(); return; }
       if (act === 'bg-preset') {
@@ -3682,6 +4279,8 @@
         if (parsed.webSearch == null) parsed.webSearch = false;
         if (parsed.stickerAuto == null) parsed.stickerAuto = false;
         if (parsed.petLink == null) parsed.petLink = false;
+        if (!parsed.toolOn) parsed.toolOn = {};
+        if (!parsed.tasks) parsed.tasks = [];
         s = parsed;
       } catch (e) { }
     }
@@ -3693,6 +4292,7 @@
     }
 
     state.cur = s;
+    restoreTasks(s);
     lsSet(K_LAST, s.id);
     resolveProvider(s);
 

@@ -61,6 +61,38 @@ public class Bridge {
     private volatile String pendingExport = "";
     private volatile String smallTag = "";
     private volatile int smallSize = 192;
+    private volatile Devices devices;
+
+    Devices devices() {
+        if (devices == null) devices = new Devices(act, this);
+        return devices;
+    }
+
+    /** 设备工具（拍照/指南针/水平仪）的结果统一从这里回页面。 */
+    void emitDevice(JSONObject p) {
+        emit("onDevice", p);
+    }
+
+    @JavascriptInterface
+    public void takePhoto() {
+        main.post(() -> devices().takePhoto(""));
+    }
+
+    /** facing = "front"（自拍）或 "back"（后置）。 */
+    @JavascriptInterface
+    public void takePhoto2(String facing) {
+        main.post(() -> devices().takePhoto("", facing));
+    }
+
+    @JavascriptInterface
+    public void readCompass() {
+        main.post(() -> devices().readCompass());
+    }
+
+    @JavascriptInterface
+    public void readLevel() {
+        main.post(() -> devices().readLevel());
+    }
 
     public Bridge(Activity a, WebView w) {
         this.act = a;
@@ -985,6 +1017,7 @@ public class Bridge {
                 java.util.Arrays.sort(dirs, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
                 for (File d : dirs) {
                     if (!d.isDirectory()) continue;
+                    if (d.getName().startsWith("_")) continue;   // _pack 存的是单张表情，不是分类
                     File[] files = d.listFiles();
                     int n = 0;
                     if (files != null) for (File f : files) if (f.isFile() && isImage(f.getName())) n++;
@@ -1082,6 +1115,11 @@ public class Bridge {
     }
 
     public void onActivityResult(int req, int resCode, Intent data) {
+        // 拍照结果走 EXTRA_OUTPUT，data 是 null，必须先处理
+        if (req == Devices.RC_PHOTO) {
+            if (devices != null) devices.onActivityResult(req, resCode, data);
+            return;
+        }
         if (resCode != Activity.RESULT_OK || data == null) return;
         final Uri uri = data.getData();
         if (uri == null) return;
@@ -1202,6 +1240,11 @@ public class Bridge {
 
     /** Small crop/scale used for avatars and sticker slots (kept tiny so it fits in prefs). */
     private void handleSmallImage(Uri uri, int size, String tag) {
+        // 表情包必须保真：GIF 一旦被 JPEG 转一道就变成静态图，所以这类直接存原文件。
+        if (tag != null && tag.startsWith("sticker:")) {
+            handleStickerFile(uri, tag);
+            return;
+        }
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
@@ -1248,6 +1291,57 @@ public class Bridge {
             emit("onSmallImage", p);
         } catch (Exception e) {
             emitToast("图片处理失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 表情包图：原样复制到 stickers/_pack/ 下，保留 GIF 动画。
+     * 返回一个 https URL（由 serveSticker 流式提供），前端直接当 img src 用。
+     */
+    private void handleStickerFile(Uri uri, String tag) {
+        String ext = ".png";
+        String mime = null;
+        try {
+            mime = act.getContentResolver().getType(uri);
+        } catch (Exception ignored) {
+        }
+        if (mime == null) {
+            try (android.database.Cursor c = act.getContentResolver().query(uri,
+                    new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+                if (c != null && c.moveToFirst()) mime = c.getString(0);
+            } catch (Exception ignored) {
+            }
+        }
+        String lower = mime == null ? "" : mime.toLowerCase();
+        if (lower.contains("gif")) ext = ".gif";
+        else if (lower.contains("webp")) ext = ".webp";
+        else if (lower.contains("png")) ext = ".png";
+        else if (lower.contains("jpeg") || lower.contains("jpg")) ext = ".jpg";
+        else {
+            String n = lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".png")
+                    || lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? lower : "";
+            if (!n.isEmpty()) ext = n.substring(n.lastIndexOf('.'));
+        }
+
+        File dir = new File(stickerRoot(), "_pack");
+        if (!dir.exists() && !dir.mkdirs()) {
+            emitToast("存不下表情图片");
+            return;
+        }
+        String name = "s_" + System.currentTimeMillis() + "_" + (int) (Math.random() * 1000) + ext;
+        File dst = new File(dir, name);
+        try (InputStream in = act.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("读取不到图片");
+            copyStream(in, dst);
+            JSONObject p = new JSONObject();
+            p.put("tag", tag);
+            p.put("url", stickerPublicUrl("_pack/" + name));
+            p.put("gif", ext.equals(".gif"));
+            p.put("kb", dst.length() / 1024);
+            emit("onSmallImage", p);
+        } catch (Exception e) {
+            dst.delete();
+            emitToast("保存表情失败：" + (e.getMessage() == null ? e.toString() : e.getMessage()));
         }
     }
 

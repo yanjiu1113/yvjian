@@ -1,4 +1,4 @@
-// Runs the real app.js (unmodified except for a test hook) in Node with a minimal DOM stub,
+﻿// Runs the real app.js (unmodified except for a test hook) in Node with a minimal DOM stub,
 // then asserts on markdown rendering, request construction and provider resolution.
 import fs from "node:fs";
 import vm from "node:vm";
@@ -584,12 +584,14 @@ J2.t.sendCore("驻京观是什么", []);
 check("non-openrouter requests skip requireParams", !J2.calls.chat[0].requireParams);
 check("non-openrouter still gets tools", Array.isArray(J2.calls.chat[0].tools));
 
-// search disabled -> neither tools nor requireParams
+// search disabled -> 不能出现 web_search（手机/定时类工具仍可声明）
 const J3 = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });
 J3.t.state.cur.webSearch = false;
 J3.t.sendCore("你好", []);
-check("tools omitted when search is off", J3.calls.chat[0].tools === undefined);
-check("requireParams omitted when search is off", !J3.calls.chat[0].requireParams);
+check("web_search omitted when search is off",
+  !(J3.calls.chat[0].tools || []).some((x) => x.function && x.function.name === "web_search"));
+check("requireParams follows tools",
+  J3.calls.chat[0].requireParams === !!(J3.calls.chat[0].tools && J3.calls.chat[0].tools.length));
 // JSON null must never leak into the transcript
 const K = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });
 K.t.state.cur.messages = [];
@@ -731,9 +733,11 @@ GS.sandbox.__bridge.onChunk(JSON.stringify({ id: GS.calls.chat[0].msgId, c: "今
 GS.sandbox.__bridge.onDone(JSON.stringify({ id: GS.calls.chat[0].msgId, tools: [] }));
 check("global 100% sends default sticker when model silent", GS.calls.stickers.indexOf("默认") >= 0, JSON.stringify(GS.calls.stickers));
 
-// 「默认」不出现在给模型的分类列表里
-const names = JSON.stringify((GS.calls.chat[0].tools || []));
-check("default category hidden from model tool schema", names.indexOf("默认") < 0);
+// 「默认」不出现在给模型的分类列表里（只看 send_sticker，别的工具描述里也可以出现「默认」二字）
+const gsStickerTool = (GS.calls.chat[0].tools || []).find(
+  (t) => t.function && t.function.name === "send_sticker");
+check("default category hidden from model tool schema",
+  !!gsStickerTool && JSON.stringify(gsStickerTool).indexOf("默认") < 0);
 
 // 报错轮不发
 const GE = createApp({ providers: [PROVIDER], sessions: [], activeProviderId: "p1", version: "1.0" });

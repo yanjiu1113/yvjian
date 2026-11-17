@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="dev.local.llmchat"
-    android:versionCode="75"
-    android:versionName="3.40">
+    android:versionCode="78"
+    android:versionName="3.43">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
 
@@ -17,6 +17,10 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="*/*" />
+        </intent>
+        <!-- 拍照工具：Android 11+ 不声明就 resolveActivity 返回 null -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
     </queries>
 
@@ -40,5 +44,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 拍照用：把自己缓存目录里的图片以 content:// 交给相机 App -->
+        <provider
+            android:name=".PhotoProvider"
+            android:authorities="dev.local.llmchat.photo"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
