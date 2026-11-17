@@ -1,4 +1,4 @@
-﻿// Runs the real app.js (unmodified except for a test hook) in Node with a minimal DOM stub,
+// Runs the real app.js (unmodified except for a test hook) in Node with a minimal DOM stub,
 // then asserts on markdown rendering, request construction and provider resolution.
 import fs from "node:fs";
 import vm from "node:vm";
@@ -201,7 +201,9 @@ check("code block not wrapped in <p>", !md("```js\nx\n```").startsWith("<p>"));
 // ---------------------------------------------------------------- request payload
 
 t.state.cur.messages = [];
+t.state.cur.deviceTools = false;   // 这条用例只看「用户没写系统提示时不要把 user 内容塞进 system」，先关掉设备注入
 t.sendCore("帮我写个快排", []);
+t.state.cur.deviceTools = true;
 
 check("chat invoked", A.calls.chat.length === 1, "calls=" + A.calls.chat.length);
 const payload = A.calls.chat[0];

@@ -1346,6 +1346,14 @@
     doSend(text, images, '', '');
   }
 
+  var DEVICE_RULE =
+    '【你手上的手机能力】你可以直接调用 take_photo / read_compass / read_level 三个工具，' +
+    '它们会真的打开这台手机的相机、读它的方向和倾角，结果（照片/度数）会作为工具结果回给你，' +
+    '之后你就能看到画面、知道朝向。『看看这里』『我朝哪边』『放平了没有』这类请求直接调用即可，' +
+    '不要回答"我看不到""我没有摄像头"——那是旧印象，现在你能。\n' +
+    '拍照前先在正文里问一句并等对方同意（例：「我想看看你，可以吗」），没问就调会被客户端拦下。' +
+    '指南针与水平仪不涉及隐私，随时可读。';
+
   var PET_RULE =
     '【隐藏信号】每条回复的最后一行，输出一个不可见的情绪标记（主人看不到，不要解释）：\n' +
     '<<mood n=7 e=害羞 ch=both>>\n' +
@@ -1377,6 +1385,9 @@
     }
     if (allowTools) {
       system = (system ? system + '\n\n' : '') + buildSearchToolPrompt(true);
+    }
+    if (s.deviceTools && (toolOn(s, 'take_photo') || toolOn(s, 'read_compass') || toolOn(s, 'read_level'))) {
+      system = (system ? system + '\n\n' : '') + DEVICE_RULE;
     }
     if (s.stickerAuto) {
       var stickerRule = buildStickerInstruction();
@@ -1564,6 +1575,20 @@
     }
     var pd = state.pendingDevice;
     state.pendingDevice = null;
+
+    // 工具页里「自己试一下」触发的调用：只写日志，不进消息流
+    if (state.probing) {
+      state.probing = false;
+      var lg = $('#ts-log');
+      if (lg) {
+        lg.textContent = o.error ? ('失败：' + o.error)
+          : ('成功 · ' + describeDevice(o) + (o.dataUrl ? '（图片已收到 ' + Math.round((o.dataUrl.length * 0.75) / 1024) + ' KB）' : '') +
+            '\n' + JSON.stringify(o).slice(0, 400));
+      }
+      dbg('device-probe', { kind: o.kind, err: o.error || '' });
+      return;
+    }
+
     var s = state.cur;
     var tool = pd && s ? findMessage(pd.toolId) : null;
     if (tool) {
@@ -1836,11 +1861,37 @@
         '<div class="s-desc">' + it.desc + '</div></div>' +
         '<div class="switch' + (toolOn(s, it.key) ? ' on' : '') + '" data-tool="' + it.key + '"></div></div>';
     });
+    html += '<div class="section-title" style="margin-top:22px">自己试一下</div>' +
+      '<div class="s-desc" style="margin-bottom:10px">不经过模型，直接调原生接口，用来确认手机这一端是不是通的。</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button class="btn small" data-probe="photo-back">后置拍照</button>' +
+      '<button class="btn small" data-probe="photo-front">前置拍照</button>' +
+      '<button class="btn small" data-probe="compass">读指南针</button>' +
+      '<button class="btn small" data-probe="level">读水平仪</button>' +
+      '</div>' +
+      '<div id="ts-log" class="s-desc" style="margin-top:10px;white-space:pre-wrap;line-height:1.6"></div>';
     html += '<button class="btn primary block" id="ts-done" style="margin-top:16px">完成</button>';
     openSheet(html);
 
     var body = $('#sheet-body');
     body.addEventListener('click', function (e) {
+      var pb = e.target.closest('[data-probe]');
+      if (pb) {
+        var kind = pb.getAttribute('data-probe');
+        var log = $('#ts-log');
+        if (log) log.textContent = '正在调用 ' + kind + ' …';
+        state.probing = true;
+        try {
+          if (kind === 'photo-back') Native.takePhoto2('back');
+          else if (kind === 'photo-front') Native.takePhoto2('front');
+          else if (kind === 'compass') Native.readCompass();
+          else Native.readLevel();
+        } catch (err) {
+          state.probing = false;
+          if (log) log.textContent = '调用失败：' + (err && err.message ? err.message : err);
+        }
+        return;
+      }
       var sw = e.target.closest('[data-tool]');
       if (!sw) return;
       var k = sw.getAttribute('data-tool');
