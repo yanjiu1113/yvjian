@@ -1979,7 +1979,7 @@
 
   /** 把记忆树摘成一段给模型看的文本（最近的在前）。 */
   function memoryDigest(s, call) {
-    var t = treeOf(s);
+    var t = ensureTree(s);
     var nodes = t.nodes.slice();
     if (call && call.branch) {
       nodes = nodes.filter(function (n) { return (n.branch || '') === call.branch; });
@@ -4519,6 +4519,7 @@
         }
         if (!m.error && o.tools && o.tools.length) {
           var call = parseToolCall(o.tools);
+          try {
           if (call && call.kind === 'search' && state.cur && state.cur.webSearch) {
             m.toolCalls = o.tools;
             if (runSearchStep(m, call.query, call.id)) return;
@@ -4550,6 +4551,12 @@
             if (sendStickerByCategory(call.category) || state.lastStickerSent) {
               m.stickerSent = true;
             }
+          }
+          } catch (e) {
+            dbg('tool-error', String(call && call.kind) + ':' + (e && e.message));
+            toast('工具执行出错：' + (e && e.message ? e.message : '未知错误'));
+            m.hidden = false;
+            renderMessages();
           }
         }
 
