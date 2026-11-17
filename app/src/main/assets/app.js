@@ -659,8 +659,17 @@
   function thinkNode(m) {
     var d = document.createElement('details');
     d.className = 'think';
-    if (m.streaming) d.open = true;
+    // 默认折叠：思考过程一开始就是收起的，想看点开；点开状态记在 state.thinkOpen 里，
+    // 重绘（换工具步骤、重试）时不会把它又收回去。
+    d.open = !!(state.thinkOpen && state.thinkOpen[m.id]);
     d.innerHTML = '<summary>思考过程</summary><div class="think-body"></div>';
+    var sum = d.querySelector('summary');
+    if (sum && m.streaming && !(m.content || '').trim()) sum.textContent = '思考中…（点开看）';
+    d.addEventListener('toggle', function () {
+      if (!state.thinkOpen) state.thinkOpen = {};
+      if (d.open) state.thinkOpen[m.id] = 1;
+      else delete state.thinkOpen[m.id];
+    });
     d.querySelector('.think-body').textContent = m.reasoning || '';
     return d;
   }
@@ -738,6 +747,8 @@
       if (think) {
         var tb = think.querySelector('.think-body');
         if (tb) tb.textContent = m.reasoning;
+        var sm = think.querySelector('summary');
+        if (sm) sm.textContent = (m.streaming && !(m.content || '').trim()) ? '思考中…（点开看）' : '思考过程';
       }
     }
 
