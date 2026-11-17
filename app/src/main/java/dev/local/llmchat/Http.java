@@ -303,7 +303,9 @@ public final class Http {
                     String content = str(delta, "content");
                     String reasoning = str(delta, "reasoning_content", "reasoning");
                     if (!content.isEmpty() || !reasoning.isEmpty()) {
-                        gotAny = true;
+                        // 只含空格/换行的 delta 不算「有内容」：否则模型返回一片空白时
+                        // gotAny=true，界面上就是一个空气泡，用户以为回复被吃了
+                        if (!content.trim().isEmpty() || !reasoning.trim().isEmpty()) gotAny = true;
                         l.onDelta(content, reasoning);
                     }
                     JSONArray tcs = delta.optJSONArray("tool_calls");

@@ -404,7 +404,7 @@ public class Bridge {
                             bufR.setLength(0);
                         }
                         acc[0] = null;
-                        emitReset(msgId);
+                        emitReset(msgId, "模型这次什么都没返回，正在简化请求重试（第 " + (stage + 2) + " 次）");
                         startStream(j, msgId, base, key, next, stage + 1);
                         return;
                     }
@@ -414,11 +414,14 @@ public class Bridge {
 
             @Override
             public void onError(String message) {
-                if (stage < 3 && body.has("tools") && looksLikeToolRejection(message)) {
+                // 已经流出来过内容就别再重来一遍：那会让用户看到「说了一半突然重新思考」，
+                // 而且把刚生成的文字丢掉。错误照实报，剩下的内容留着。
+                boolean hadVisible = bufC.length() > 0 || bufR.length() > 0;
+                if (stage < 3 && body.has("tools") && !hadVisible && looksLikeToolRejection(message)) {
                     JSONObject next = downgrade(body, 3);
                     if (next != null) {
                         Log.w(TAG, "endpoint rejected tools, retrying without them: " + message);
-                        emitReset(msgId);
+                        emitReset(msgId, "服务商拒绝了工具参数，正在不带工具重试");
                         startStream(j, msgId, base, key, next, 3);
                         return;
                     }
@@ -506,9 +509,15 @@ public class Bridge {
 
     /** 通知前端丢弃该消息已收到的一半内容（降级重试前调用） */
     private void emitReset(String msgId) {
+        emitReset(msgId, "");
+    }
+
+    /** 同上，附带一句给用户看的重试原因，免得界面「突然清空」让人以为丢消息 */
+    private void emitReset(String msgId, String reason) {
         JSONObject p = new JSONObject();
         try {
             p.put("id", msgId);
+            if (reason != null && !reason.isEmpty()) p.put("why", reason);
         } catch (Exception ignored) {
         }
         emit("onReset", p);

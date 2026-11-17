@@ -1,7 +1,25 @@
-# Build LLM Chat APK with the standalone Android SDK (aapt2 + javac + d8 + apksigner).
+﻿# Build LLM Chat APK with the standalone Android SDK (aapt2 + javac + d8 + apksigner).
 # Usage: powershell -ExecutionPolicy Bypass -File build.ps1
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
+# aapt2 不认非 ASCII 路径（中文目录会报 failed to open directory），
+# 检测到中文路径就建一个 ASCII 软链接，用同一个脚本再跑一遍。
+if ($root -match "[^\x00-\x7F]" -and -not $env:YJCHAT_ASCII_MIRROR) {
+    $stage = Join-Path $env:TEMP ("yjchat_" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    cmd /c "mklink /J `"$stage\chat`" `"$root`"" | Out-Null
+    Write-Host "==> path has non-ASCII chars, mirroring to $stage"
+    $env:YJCHAT_ASCII_MIRROR = "1"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $stage "chat\build.ps1")
+    $code = $LASTEXITCODE
+    $newest = Get-ChildItem (Join-Path $root "dist") -Filter "*.apk" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($newest) { Write-Host "==> APK: $($newest.FullName)" }
+    $link = Join-Path $stage "chat"
+    if (Test-Path $link) { cmd /c "rmdir `"$link`"" 2>$null | Out-Null }
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+    exit $code
+}
 $sdk = Join-Path $root ".toolchain\android-sdk"
 $jdk = Join-Path $root ".toolchain\jdk-17"
 $bt = Join-Path $sdk "build-tools\34.0.0"
@@ -27,7 +45,7 @@ Write-Host "==> aapt2 compile"
 Run "$bt\aapt2.exe" "compile --dir `"$src\res`" -o `"$out\res.zip`""
 
 Write-Host "==> aapt2 link"
-Run "$bt\aapt2.exe" "link -o `"$out\base.apk`" -I `"$androidJar`" --manifest `"$src\AndroidManifest.xml`" -R `"$out\res.zip`" -A `"$src\assets`" --min-sdk-version 26 --target-sdk-version 34 --version-code 74 --version-name 3.39 --no-version-vectors"
+Run "$bt\aapt2.exe" "link -o `"$out\base.apk`" -I `"$androidJar`" --manifest `"$src\AndroidManifest.xml`" -R `"$out\res.zip`" -A `"$src\assets`" --min-sdk-version 26 --target-sdk-version 34 --version-code 75 --version-name 3.40 --no-version-vectors"
 
 Write-Host "==> javac"
 $files = Get-ChildItem (Join-Path $src "java") -Recurse -Filter *.java | ForEach-Object { $_.FullName.Replace('\', '/') }
@@ -68,7 +86,7 @@ if (-not (Test-Path $ks)) {
 }
 
 Write-Host "==> apksigner"
-$apk = Join-Path $dist "Yujian-3.39.apk"
+$apk = Join-Path $dist "Yujian-3.40.apk"
 Run "$bt\apksigner.bat" "sign --ks `"$ks`" --ks-pass pass:llmchat-local --key-pass pass:llmchat-local --v1-signing-enabled true --v2-signing-enabled true --out `"$apk`" `"$out\aligned.apk`""
 
 Write-Host "==> verify"

@@ -586,6 +586,14 @@
     }
     col.appendChild(body);
 
+    // 重试提示：以前这里会「突然清空再重新思考」，看起来像丢消息/重复输出
+    if (m.retryCount && m.streaming) {
+      var rt = document.createElement('div');
+      rt.className = 'msg-retry';
+      rt.textContent = '↻ ' + (m.retryWhy || '正在重试') + (m.retryCount > 1 ? '（第 ' + (m.retryCount + 1) + ' 次）' : '');
+      col.appendChild(rt);
+    }
+
     if (m.error) col.appendChild(buildErrorNode(m.error));
 
     var acts = document.createElement('div');
@@ -3037,8 +3045,10 @@
       if (!m) return;
       m.content = '';
       m.reasoning = '';
-      dbg('reset', o.id);
-      updateMessageNode(m);
+      m.retryCount = (m.retryCount || 0) + 1;
+      m.retryWhy = o.why || '正在重试';
+      dbg('reset', { id: o.id, why: m.retryWhy, n: m.retryCount });
+      renderMessages();
     },
 
     onDone: function (raw) {
@@ -3069,17 +3079,25 @@
           pushPetReply(stripEmo(m.content || ''), m.mood || '');
         }
 
-        // 只调用工具、没有文字的回复是合法的：把空白的助手气泡去掉
-        if (m.stickerRequested && !(m.content || '').trim() && !m.error) {
+        // 只调用工具、没有文字的回复是合法的：把空白的助手气泡去掉。
+        // 但如果表情其实没发出去，气泡必须留下，否则用户看到的就是「回复被吃了」。
+        var bodyText0 = (m.content || '').trim();
+        if (m.stickerRequested && !bodyText0 && !m.error) {
           var s0 = state.cur;
-          if (s0) {
-            var sent = !!m.stickerSent;
+          if (s0 && m.stickerSent) {
             s0.messages = s0.messages.filter(function (x) { return x.id !== m.id; });
             renderMessages();
             renderComposer();
             persist(true);
-            dbg('done', { id: o.id, tools: (o.tools || []).length, len: 0, stickerOnly: true, sent: sent });
-            if (!sent) toast('这次没发表情（概率未命中或分类为空）');
+            dbg('done', { id: o.id, tools: (o.tools || []).length, len: 0, stickerOnly: true, sent: true });
+            return;
+          }
+          if (s0) {
+            m.error = '模型只调用了表情工具，但这次没匹配到表情包（可以点「重新生成」，或在设置里多选几个分类）';
+            dbg('done', { id: o.id, tools: (o.tools || []).length, len: 0, stickerOnly: true, sent: false });
+            renderMessages();
+            renderComposer();
+            persist(true);
             return;
           }
         }
@@ -3092,7 +3110,11 @@
           }
         }
 
-        if (!m.content && !m.error) m.error = '模型没有返回内容';
+        if (!(m.content || '').trim() && !m.error) {
+          m.error = m.reasoning && m.reasoning.trim()
+            ? '这次只输出了思考过程，正文是空的（点「重新生成」再试一次）'
+            : '模型没有返回内容（点「重新生成」再试一次，或换一个模型）';
+        }
 
         if (o.usage) {
           var u = state.meta.usage || { p: 0, c: 0, rounds: 0 };
