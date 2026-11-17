@@ -1800,3 +1800,51 @@ html, body { max-width: 100vw; overflow-x: hidden; }
   0%, 100% { height: 4px; }
   50% { height: 15px; }
 }
+/* ---------------------------------------------------- 情感记忆树（右侧滑出页） */
+.side-panel-body { padding: 6px 10px 26px; overflow: auto; }
+.tree-empty {
+  margin: 26px 8px;
+  padding: 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .04);
+  border: 1px dashed rgba(255, 255, 255, .12);
+  color: #b8aeb4;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.tree-canvas { position: relative; margin: 4px auto; }
+.tree-links { position: absolute; left: 0; top: 0; pointer-events: none; }
+.tree-node {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 8px 9px 7px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(58, 44, 48, .96), rgba(40, 31, 34, .96));
+  border: 1px solid rgba(255, 155, 147, .26);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .28);
+  cursor: pointer;
+  transition: border-color .16s, transform .12s;
+  z-index: 2;
+}
+.tree-node:active { transform: scale(.98); }
+.tree-node.open { border-color: rgba(255, 155, 147, .7); z-index: 3; }
+.tn-emo { font-size: 14px; font-weight: 600; color: #ffd9d5; letter-spacing: .04em; }
+.tn-bar {
+  margin: 6px 0 5px;
+  height: 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, .08);
+  overflow: hidden;
+}
+.tn-bar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #ffb3ac, #d2564e); }
+.tn-time { font-size: 11px; color: #9a8f95; font-variant-numeric: tabular-nums; }
+.tn-events {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.tn-ev-t { font-size: 10px; color: #8e8489; font-variant-numeric: tabular-nums; }
+.tn-ev-x { font-size: 12px; line-height: 1.6; color: #ddd3d6; word-break: break-word; }

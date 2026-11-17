@@ -277,6 +277,7 @@
       autoRead: false,
       toolOn: {},
       tasks: [],
+      tree: { nodes: [] },
       messages: []
     };
   }
@@ -328,6 +329,7 @@
 
     if (s.stream == null) s.stream = true;
 
+    if (!s.tree || !Array.isArray(s.tree.nodes)) s.tree = { nodes: [] };
     if (s.webSearch == null) s.webSearch = false;
     if (s.stickerAuto == null) s.stickerAuto = false;
     if (!s.toolOn) s.toolOn = {};
@@ -1356,6 +1358,7 @@
       if (names.length) list = list.concat(stickerTools(names));
     }
     if (s && toolOn(s, 'schedule_task')) list = list.concat(taskTools());
+    if (s && toolOn(s, 'remember')) list = list.concat(treeTools());
     if (s && toolOn(s, 'send_voice')) list = list.concat(voiceTools());
     return list;
   }
@@ -1394,6 +1397,16 @@
           if (mv) vtxt = mv[1].trim();
         }
         if (vtxt) return { kind: 'voice', text: vtxt.slice(0, 200), id: t.id || '' };
+        continue;
+      }
+      if (name === 'remember') {
+        var pEmo = parsed ? String(parsed.emotion || parsed.mood || '').trim() : '';
+        var pSum = parsed ? String(parsed.summary || parsed.event || '').trim() : '';
+        var pPar = parsed ? String(parsed.parent || parsed.parentId || '').trim() : '';
+        var pW = parsed ? Number(parsed.weight) : 0;
+        if (pEmo || pSum) {
+          return { kind: 'tree', id: t.id || '', emotion: pEmo.slice(0, 12), summary: pSum.slice(0, 240), parentId: pPar, weight: pW };
+        }
         continue;
       }
       if (DEVICE_TOOLS[name]) {
@@ -1881,6 +1894,27 @@
     return (sec / 3600).toFixed(1).replace('.0', '') + ' 小时';
   }
 
+  /** 写一条记忆。正文有话说就只记录、不打断；只调了工具没说话，才把结果喂回去让它继续。 */
+  function runTreeStep(assistantMsg, call) {
+    var s = state.cur;
+    if (!s || !call) return false;
+    var node = addMemory(s, call);
+    if (!node) return false;
+    persist(true);
+    if (state.open.side) renderTree();
+    dbg('remember', node.emotion + '/' + node.weight);
+    if ((assistantMsg.content || '').trim()) return false;
+    s.messages.push({
+      id: uid(), role: 'tool', device: 'tree', pending: false, ts: now(),
+      content: '已写进情感记忆树：' + node.emotion + '（分量 ' + node.weight + '）' +
+        (node.events.length ? '；事件：' + node.events[0].text : '')
+    });
+    renderMessages();
+    persist(true);
+    continueAfterSearch();
+    return true;
+  }
+
   function runTaskStep(assistantMsg, call) {
     var s = state.cur;
     if (!s) return false;
@@ -2242,7 +2276,8 @@
     { key: 'web_search', label: '联网搜索', desc: '需要先在设置里配好搜索引擎的 Key' },
     { key: 'send_sticker', label: '发表情包', desc: '关掉后模型不能再发表情（自动表情总闸也要开着）' },
     { key: 'send_voice', label: '发语音', desc: '模型可以自己决定发一条语音气泡；需要装好 CloneTTS' },
-    { key: 'schedule_task', label: '定时任务', desc: '允许模型自己定一个到点提醒；应用彻底关掉后可能丢' }
+    { key: 'schedule_task', label: '定时任务', desc: '允许模型自己定一个到点提醒；应用彻底关掉后可能丢' },
+    { key: 'remember', label: '情感记忆树', desc: '允许模型把情绪与事件记到右侧那棵树里；她只写，你只能看' }
   ];
 
   /** 一行摘要，给设置页显示。 */
@@ -2319,7 +2354,150 @@
     $('#ts-done').addEventListener('click', function () { closeSheet(); });
   }
 
-  // ------------------------------------------------------- 右侧滑出页（先留白）
+  // ------------------------------------------------------- 情感记忆树
+  // 完全由模型写入，用户只能看。数据跟着会话走：s.tree = { nodes: [...] }
+  // node = { id, parentId, emotion, weight, ts, events: [{ ts, text, weight }] }
+
+  var treeOpen = {};   // 哪些节点展开了事件（按会话里的节点 id 记）
+
+  function ensureTree(s) {
+    if (!s) return { nodes: [] };
+    if (!s.tree || !Array.isArray(s.tree.nodes)) s.tree = { nodes: [] };
+    return s.tree;
+  }
+
+  function treeById(s, id) {
+    if (!id) return null;
+    var t = ensureTree(s);
+    for (var i = 0; i < t.nodes.length; i++) if (t.nodes[i].id === id) return t.nodes[i];
+    return null;
+  }
+
+  /** 模型写入一条记忆：树为空时先插一个「只有情感」的根节点。 */
+  function addMemory(s, p) {
+    var t = ensureTree(s);
+    var emo = String(p.emotion || '').trim().slice(0, 12);
+    var w = Math.max(1, Math.min(100, Math.round(Number(p.weight) || 50)));
+    var sum = String(p.summary || '').trim().slice(0, 240);
+    if (!emo && !sum) return null;
+    var ts = now();
+    var node = null;
+    if (!t.nodes.length) {
+      node = { id: uid(), parentId: '', emotion: emo || '初见', weight: w, ts: ts, events: [] };
+      t.nodes.push(node);
+      if (!sum) return node;
+    }
+    var parent = treeById(s, p.parentId) || t.nodes[t.nodes.length - 1] || null;
+    var child = {
+      id: uid(),
+      parentId: parent ? parent.id : '',
+      emotion: emo || (parent ? parent.emotion : '未命名'),
+      weight: w,
+      ts: ts,
+      events: []
+    };
+    if (sum) child.events.push({ ts: ts, text: sum, weight: w });
+    t.nodes.push(child);
+    return child;
+  }
+
+  /** 自底向上布点：根在最下，新枝往上长。 */
+  function treeLayout(nodes) {
+    var byId = {}, kids = {}, roots = [];
+    nodes.forEach(function (n) { byId[n.id] = n; kids[n.id] = []; });
+    nodes.forEach(function (n) {
+      if (n.parentId && byId[n.parentId]) kids[n.parentId].push(n);
+      else roots.push(n);
+    });
+    var cursor = 0, pos = {}, maxDepth = 0;
+    function walk(n, d) {
+      if (d > maxDepth) maxDepth = d;
+      var cs = kids[n.id] || [];
+      if (!cs.length) { pos[n.id] = { x: cursor++, d: d }; return; }
+      cs.forEach(function (c) { walk(c, d + 1); });
+      var xs = cs.map(function (c) { return pos[c.id].x; });
+      pos[n.id] = { x: (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2, d: d };
+    }
+    roots.forEach(function (r) { walk(r, 0); });
+    return { pos: pos, cols: Math.max(1, cursor), depth: maxDepth };
+  }
+
+  function renderTree() {
+    var body = $('#side-panel-body');
+    if (!body) return;
+    var s = state.cur;
+    var t = ensureTree(s);
+    var titleEl = $('#side-panel-title');
+    if (titleEl) titleEl.textContent = '情感记忆树';
+    if (!t.nodes.length) {
+      body.innerHTML = '<div class="tree-empty">这里还空着。<br><br>聊过几轮之后，她会自己把记得的东西长在这棵树上——<b>只能看，不能写</b>。底下的圆点是一切的起点，越往上越新。</div>';
+      return;
+    }
+    var L = treeLayout(t.nodes);
+    var W = 132, H = 76, ROW = 122, PAD = 18, GAP = 24;
+    var cw = Math.max(L.cols * (W + GAP) + PAD * 2, 260);
+    var ch = (L.depth + 1) * ROW + PAD * 2;
+    var xy = {};
+    t.nodes.forEach(function (n) {
+      var p = L.pos[n.id];
+      if (!p) return;
+      xy[n.id] = { x: PAD + p.x * (W + GAP), y: ch - PAD - (p.d + 1) * ROW + (ROW - H) };
+    });
+    var svg = '<svg class="tree-links" width="' + cw + '" height="' + ch + '" viewBox="0 0 ' + cw + ' ' + ch + '">';
+    t.nodes.forEach(function (n) {
+      var a = xy[n.id], b = n.parentId ? xy[n.parentId] : null;
+      if (!a || !b) return;
+      var x1 = a.x + W / 2, y1 = a.y, x2 = b.x + W / 2, y2 = b.y + H;
+      var my = (y1 + y2) / 2;
+      svg += '<path d="M' + x1 + ',' + y1 + ' C' + x1 + ',' + my + ' ' + x2 + ',' + my + ' ' + x2 + ',' + y2 + '" fill="none" stroke="rgba(255,155,147,.42)" stroke-width="1.6"/>';
+    });
+    svg += '</svg>';
+    var html = '<div class="tree-canvas" style="width:' + cw + 'px;height:' + ch + 'px">' + svg;
+    t.nodes.forEach(function (n) {
+      var p = xy[n.id];
+      if (!p) return;
+      var open = !!treeOpen[n.id];
+      var w = Math.max(1, Math.min(100, n.weight || 0));
+      html += '<div class="tree-node' + (open ? ' open' : '') + '" data-node="' + n.id + '" style="left:' + p.x + 'px;top:' + p.y + 'px;width:' + W + 'px">' +
+        '<div class="tn-emo">' + esc(n.emotion || '') + '</div>' +
+        '<div class="tn-bar"><i style="width:' + w + '%"></i></div>' +
+        '<div class="tn-time">' + fmtClock(n.ts) + ' · ' + w + '</div>' +
+        (open ? '<div class="tn-events">' + ((n.events && n.events.length)
+          ? n.events.map(function (ev) {
+            return '<div class="tn-ev"><div class="tn-ev-t">' + fmtClock(ev.ts) + '</div><div class="tn-ev-x">' + esc(ev.text) + '</div></div>';
+          }).join('')
+          : '<div class="tn-ev"><div class="tn-ev-x">这一步只留下情绪，没有具体事件。</div></div>') + '</div>' : '') +
+        '</div>';
+    });
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  function treeTools() {
+    return [{
+      type: 'function',
+      function: {
+        name: 'remember',
+        description: '把这一刻写进「情感记忆树」。这棵树完全由你维护，对方只能看、不能写。' +
+          '值得记住的情绪或事件出现时就调用它。emotion 是 2-6 个字的情绪词；weight 是这件事在你心里的分量 1-100；' +
+          'summary 是**你自己概括**的事件（一两句、40 字以内，不要抄原话）。' +
+          '树为空时第一次调用会自动长出根节点（只有情感和时间，没有事件）；' +
+          'parent 可选：填某个节点 id 表示这一步是从那里分出来的，不填就接在最新的一步上面。' +
+          '同一轮里不要连续调用超过两次。',
+        parameters: {
+          type: 'object',
+          properties: {
+            emotion: { type: 'string', description: '2-6 个字的情绪词，例如 心动 / 委屈 / 安心 / 心疼 / 戒备' },
+            weight: { type: 'integer', description: '分量 1-100，越大越接近主干' },
+            summary: { type: 'string', description: '你自己概括的事件，一两句、40 字以内' },
+            parent: { type: 'string', description: '可选，父节点 id' }
+          },
+          required: ['emotion']
+        }
+      }
+    }];
+  }
+  // ------------------------------------------------------- 右侧滑出页
 
   function openSidePanel() {
     var el = $('#side-panel');
@@ -2327,6 +2505,7 @@
     el.classList.add('open');
     el.setAttribute('aria-hidden', 'false');
     state.open.side = true;
+    renderTree();
   }
 
   function closeSidePanel() {
@@ -2340,6 +2519,17 @@
   function bindSidePanel() {
     var closeBtn = $('#side-panel-close');
     if (closeBtn) closeBtn.addEventListener('click', closeSidePanel);
+
+    // 点一个节点：展开/收起它下面的事件（用户只能看，这里没有任何编辑入口）
+    var treeBody = $('#side-panel-body');
+    if (treeBody) treeBody.addEventListener('click', function (e) {
+      var n = e.target.closest ? e.target.closest('.tree-node') : null;
+      if (!n) return;
+      var id = n.getAttribute('data-node') || '';
+      if (!id) return;
+      treeOpen[id] = !treeOpen[id];
+      renderTree();
+    });
 
     var sx = 0, sy = 0, tracking = false, fromEdge = false;
     document.addEventListener('touchstart', function (e) {
@@ -4194,6 +4384,10 @@
           if (call && call.kind === 'search' && state.cur && state.cur.webSearch) {
             m.toolCalls = o.tools;
             if (runSearchStep(m, call.query, call.id)) return;
+          }
+          if (call && call.kind === 'tree') {
+            m.toolCalls = o.tools;
+            if (runTreeStep(m, call)) return;
           }
           if (call && call.kind === 'device') {
             m.toolCalls = o.tools;
