@@ -1929,6 +1929,7 @@
     if (!(assistantMsg.content || '').trim()) assistantMsg.hidden = true;
     state.streamingId = null;
     renderMessages();
+    renderComposer();   // 语音这一步就结束本轮，输入框要退回发送箭头，别停在“停止”
     persist(true);
 
     try {
