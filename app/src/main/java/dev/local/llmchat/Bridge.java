@@ -58,6 +58,9 @@ public class Bridge {
     private volatile boolean overlayOpen = false;
     private final StringBuilder bufC = new StringBuilder();
     private final StringBuilder bufR = new StringBuilder();
+    /** 本轮累计（只增不清），用来判断「到底流过内容没有」，不受 flushChunk 影响。 */
+    private final StringBuilder allC = new StringBuilder();
+    private final StringBuilder allR = new StringBuilder();
     private volatile String pendingExport = "";
     private volatile String smallTag = "";
     private volatile int smallSize = 192;
@@ -405,6 +408,13 @@ public class Bridge {
     private void startStream(final Http.Job j, final String msgId, final String base, final String key,
                              final JSONObject body, final int stage) {
         final JSONArray[] acc = new JSONArray[1];
+        // 每开始一次新的请求（含降级重试），把「本轮到底流过什么」的账重新记
+        synchronized (allC) {
+            allC.setLength(0);
+        }
+        synchronized (allR) {
+            allR.setLength(0);
+        }
         pool.execute(() -> Http.streamChat(base, key, body, j, new Http.Listener() {
             @Override
             public void onDelta(String content, String reasoning) {
@@ -413,6 +423,14 @@ public class Bridge {
                 }
                 synchronized (bufR) {
                     bufR.append(reasoning);
+                }
+                // bufC/bufR 每 40 ms 被 flushChunk 清空一次，不能拿来判断「这一轮有没有内容」，
+                // 所以另记一份只增不清的账。
+                synchronized (allC) {
+                    allC.append(content);
+                }
+                synchronized (allR) {
+                    allR.append(reasoning);
                 }
             }
 
@@ -431,19 +449,26 @@ public class Bridge {
             @Override
             public void onDone() {
                 // 注意：模型可能只吐了空格/换行，必须用 trim 判断，否则降级链永远不触发
-                String gotText = bufC.toString().trim();
+                String gotText;
+                String gotThink;
+                synchronized (allC) {
+                    gotText = allC.toString().trim();
+                }
+                synchronized (allR) {
+                    gotThink = allR.toString().trim();
+                }
                 emitDebug("tools", "请求结束 stage=" + stage
-                        + " content=" + bufC.length()
-                        + " reasoning=" + bufR.length()
+                        + " content=" + gotText.length()
+                        + " reasoning=" + gotThink.length()
                         + " toolCalls=" + (acc[0] == null ? 0 : acc[0].length()));
                 // 思考内容也算有输出：否则推理模型（只有 reasoning_content、content 为空）
                 // 会触发降级链，导致同一轮思考 2-3 遍
                 boolean empty = gotText.isEmpty()
-                        && bufR.toString().trim().isEmpty()
+                        && gotThink.isEmpty()
                         && (acc[0] == null || acc[0].length() == 0);
                 if (empty) {
-                    emitDebug("tools", "本轮空回复：content=" + bufC.length()
-                            + " reasoning=" + bufR.length() + " stage=" + stage);
+                    emitDebug("tools", "本轮空回复：content=" + gotText.length()
+                            + " reasoning=" + gotThink.length() + " stage=" + stage);
                 }
                 if (stage < 3 && body.has("tools") && empty) {
                     JSONObject next = downgrade(body, stage + 1);
@@ -467,7 +492,15 @@ public class Bridge {
             public void onError(String message) {
                 // 已经流出来过内容就别再重来一遍：那会让用户看到「说了一半突然重新思考」，
                 // 而且把刚生成的文字丢掉。错误照实报，剩下的内容留着。
-                boolean hadVisible = bufC.length() > 0 || bufR.length() > 0;
+                boolean hadVisible;
+                synchronized (allC) {
+                    hadVisible = allC.length() > 0;
+                }
+                if (!hadVisible) {
+                    synchronized (allR) {
+                        hadVisible = allR.length() > 0;
+                    }
+                }
                 if (stage < 3 && body.has("tools") && !hadVisible && looksLikeToolRejection(message)) {
                     JSONObject next = downgrade(body, 3);
                     if (next != null) {
