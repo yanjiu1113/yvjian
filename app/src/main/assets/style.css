@@ -1687,6 +1687,16 @@ html, body { max-width: 100vw; overflow-x: hidden; }
   color: var(--text, #f2eef2);
   opacity: .92;
 }
+.side-panel-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.side-panel-switch-label {
+  font-size: 11px;
+  color: var(--text-3, #9a8f95);
+  white-space: nowrap;
+}
 .side-panel-body {
   flex: 1 1 auto;
   min-height: 0;

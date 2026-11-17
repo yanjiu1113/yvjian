@@ -2429,6 +2429,10 @@
     var t = ensureTree(s);
     var titleEl = $('#side-panel-title');
     if (titleEl) titleEl.textContent = '情感记忆树';
+    var sw = $('#tree-switch');
+    if (sw) sw.classList.toggle('on', toolOn(s, 'remember'));
+    var swLbl = $('#tree-switch-label');
+    if (swLbl) swLbl.textContent = toolOn(s, 'remember') ? '记录中' : '已暂停';
     if (!t.nodes.length) {
       body.innerHTML = '<div class="tree-empty">这里还空着。<br><br>聊过几轮之后，她会自己把记得的东西长在这棵树上——<b>只能看，不能写</b>。底下的圆点是一切的起点，越往上越新。</div>';
       return;
@@ -2519,6 +2523,19 @@
   function bindSidePanel() {
     var closeBtn = $('#side-panel-close');
     if (closeBtn) closeBtn.addEventListener('click', closeSidePanel);
+
+    // 顶部开关：启停「情感记忆树」的写入（等同 toolOn('remember')）
+    var tsw = $('#tree-switch');
+    if (tsw) tsw.addEventListener('click', function () {
+      var s = state.cur;
+      if (!s) return;
+      if (!s.toolOn) s.toolOn = {};
+      s.toolOn.remember = !toolOn(s, 'remember');
+      tsw.classList.toggle('on', toolOn(s, 'remember'));
+      var lbl = $('#tree-switch-label');
+      if (lbl) lbl.textContent = toolOn(s, 'remember') ? '记录中' : '已暂停';
+      persist(true);
+    });
 
     // 点一个节点：展开/收起它下面的事件（用户只能看，这里没有任何编辑入口）
     var treeBody = $('#side-panel-body');

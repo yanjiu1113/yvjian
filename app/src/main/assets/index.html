@@ -99,7 +99,11 @@
 <aside id="side-panel" class="side-panel" aria-hidden="true">
   <div class="side-panel-head">
     <div class="side-panel-title" id="side-panel-title">情感记忆树</div>
-    <button class="btn small ghost" id="side-panel-close">收起</button>
+    <div class="side-panel-tools">
+      <span class="side-panel-switch-label" id="tree-switch-label">记录中</span>
+      <div class="switch on" id="tree-switch" role="switch" aria-checked="true" title="关闭后模型就看不到 remember 工具，树不会再长"></div>
+      <button class="btn small ghost" id="side-panel-close">收起</button>
+    </div>
   </div>
   <div id="side-panel-body" class="side-panel-body"></div>
 </aside>
