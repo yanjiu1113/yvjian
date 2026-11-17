@@ -1024,7 +1024,8 @@
         }
       } else if (m.role === 'assistant') {
         if (m.kind === 'voice' && m.voice && m.voice.text) {
-          out.push({ role: 'assistant', content: '（语音）' + m.voice.text });
+          // 只回放说过的话，不加「（语音）」前缀：否则模型会学着在正文里写这个标记来假装发语音
+          out.push({ role: 'assistant', content: m.voice.text });
         } else if (m.content && m.content.trim() && !m.error) {
           out.push({ role: 'assistant', content: stripSearchDisplay(m.content) });
         }
@@ -1242,7 +1243,9 @@
           '什么时候用由你判断：想说一句短的、撒娇、懒得打字、' +
           '或者语音比文字更有感觉的时候。' +
           '文字要口语化、短（一两句、不超过 60 字），不要带表情符号和 markdown；' +
-          '想说长内容就正常打字，别用语音念一大段。',
+          '想说长内容就正常打字，别用语音念一大段。' +
+          '注意：想发语音就调用本工具；不要在正文里写「（语音）」或「[语音]」这样的标记假装发了语音，' +
+          '那样对方只会看到两个字，听不到任何声音。',
         parameters: {
           type: 'object',
           properties: {
@@ -1775,6 +1778,21 @@
       .trim();
   }
 
+  /**
+   * 兜底：模型没调 send_voice，却在正文最前面写了「（语音）…」——
+   * 把它当成真的要发语音，标记后面的正文当语音内容。
+   * 只认「标记＋内容」这种形状，"（语音）" 单独一行则不认（避免把正常括号词吃掉）。
+   */
+  var VOICE_MARK_RE = /^[\s\u3000]*[（(【\[]\s*(?:语音|语音消息|语音条|voice|audio)\s*[）)】\]]\s*[:：]?\s*([\s\S]+)$/i;
+
+  function parseVoiceMarker(text) {
+    var mt = VOICE_MARK_RE.exec(String(text || ''));
+    if (!mt) return null;
+    var said = String(mt[1] || '').trim();
+    if (said.length < 1) return null;
+    return { text: said.slice(0, 200), rest: '' };
+  }
+
   function describeDevice(o) {
     if (o.error) return '';
     if (o.kind === 'photo') return '已拍照 ' + o.w + '×' + o.h + '（' + o.kb + ' KB）';
@@ -1907,6 +1925,8 @@
     };
     s.messages.push(vm);
     assistantMsg.streaming = false;
+    // 这条助手消息如果只剩“工具调用”没别的话，就不要在界面上留一个空气泡
+    if (!(assistantMsg.content || '').trim()) assistantMsg.hidden = true;
     state.streamingId = null;
     renderMessages();
     persist(true);
@@ -4154,6 +4174,14 @@
             renderMessages();
             dbg('device-tag', tagCall.dev + '/' + (tagCall.facing || ''));
             if (runDeviceStep(m, tagCall)) return;
+          }
+          // 兜底：模型没调工具，只在正文最前面写了「（语音）」——把它当成真的要发语音
+          var vMark = parseVoiceMarker(m.content || '');
+          if (vMark && state.cur && toolOn(state.cur, 'send_voice')) {
+            m.content = vMark.rest;
+            renderMessages();
+            dbg('voice-marker', vMark.text.slice(0, 24));
+            if (runVoiceStep(m, { kind: 'voice', text: vMark.text, id: '' })) return;
           }
         }
         if (!m.error && o.tools && o.tools.length) {
