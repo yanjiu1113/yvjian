@@ -1566,19 +1566,7 @@
     return true;
   }
 
-  /** 原生把拍照/传感器结果送回来。 */
-  window.__bridge = window.__bridge || {};
-  window.__bridge.onDevice = function (raw) {
-    try {
-      handleDeviceResult(raw);
-    } catch (e) {
-      try { Native.toast('设备结果处理出错：' + (e && e.message ? e.message : e)); } catch (err) { }
-      dbg('device-error', { msg: String((e && e.message) || e) });
-      state.probing = false;
-      state.pendingDevice = null;
-    }
-  };
-
+  /** 原生把拍照/传感器结果送回来（挂载在文末的 window.__bridge 对象里）。 */
   function handleDeviceResult(raw) {
     var o;
     try {
@@ -3718,6 +3706,19 @@
   };
 
   window.__bridge = {
+    // 设备结果（拍照 / 指南针 / 水平仪）由原生回填到这里。
+    // 注意：这个对象字面量会把前面的 window.__bridge 整个替换掉，
+    // 所以 onDevice 必须写在这里，不能在别处单独挂。
+    onDevice: function (raw) {
+      try {
+        handleDeviceResult(raw);
+      } catch (e) {
+        try { Native.toast('设备结果处理出错：' + (e && e.message ? e.message : e)); } catch (err) { }
+        dbg('device-error', { msg: String((e && e.message) || e) });
+        state.probing = false;
+        state.pendingDevice = null;
+      }
+    },
     onChunk: function (raw) {
       var o = JSON.parse(raw);
       var m = findMessage(o.id);
