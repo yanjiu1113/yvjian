@@ -58,12 +58,29 @@ public class Voice {
             return;
         }
         pool.execute(() -> {
+            // 本地语音服务经常要预热（第一次请求可能要几秒才起来），单次失败不能说明它没开。
+            // 这里自己做三次重试，只有“端口根本连不上”才向上层报告 needApp。
             File f = null;
             String err = "";
-            try {
-                f = fetch(id, body, voice, rate);
-            } catch (Exception e) {
-                err = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    f = fetch(id, body, voice, rate);
+                    err = "";
+                    break;
+                } catch (Exception e) {
+                    err = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    boolean retryable = err.contains("连不上语音服务") || err.contains("响应超时");
+                    if (attempt < 2 && retryable) {
+                        try {
+                            Thread.sleep(attempt == 0 ? 700 : 1800);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        continue;
+                    }
+                    break;
+                }
             }
             final File file = f;
             final String e2 = err;
@@ -97,12 +114,18 @@ public class Voice {
             url += "&rate=" + rate;
         }
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(900);
+        c.setConnectTimeout(2500);
         c.setReadTimeout(25000);
         c.setRequestProperty("User-Agent", "LLMChat");
         int code;
         try {
             code = c.getResponseCode();
+        } catch (java.net.ConnectException | java.net.NoRouteToHostException e) {
+            c.disconnect();
+            throw new Exception("连不上语音服务（CloneTTS 没开？）");
+        } catch (java.net.SocketTimeoutException e) {
+            c.disconnect();
+            throw new Exception("语音服务响应超时（可能正在加载模型）");
         } catch (Exception e) {
             c.disconnect();
             throw new Exception("连不上语音服务（CloneTTS 没开？）");
@@ -114,6 +137,9 @@ public class Voice {
         byte[] data;
         try (InputStream in = c.getInputStream()) {
             data = readAll(in);
+        } catch (java.net.SocketTimeoutException te) {
+            c.disconnect();
+            throw new Exception("语音服务响应超时（可能正在加载模型）");
         }
         c.disconnect();
         if (data == null || data.length < 512) throw new Exception("音频是空的");

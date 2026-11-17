@@ -4114,23 +4114,11 @@
           m.voice.kb = Number(o.kb) || 0;
         } else {
           m.voice.error = o.error || '合成失败';
-          // 大概率是 CloneTTS 没在跑：拉起它，然后重试一次
-          if (o.needApp && !m.voice.retried) {
-            m.voice.retried = true;
-            m.voice.state = 'synth';
-            toast('CloneTTS 好像没在运行，正在打开它…');
-            try { Native.openCloneTts(); } catch (e) {}
-            renderMessages();
-            var retryId = m.id, retryText = m.voice.text;
-            setTimeout(function () {
-              var mm = findVoiceMsg(retryId);
-              if (!mm || mm.voice.state === 'ready') return;
-              try {
-                Native.voiceSynth(retryId, retryText,
-                  (state.tts && state.tts.voice) || '', (state.tts && state.tts.rate) || 1.0);
-              } catch (e) {}
-            }, 4500);
-            return;
+          // 不再自动跳去 CloneTTS：它常常是在的，只是第一次请求还没热身，
+          // 原生那边已经重试过三次了，这里只把原因说清楚，别抢用户的屏幕。
+          if (o.needApp && !m.voice.warned) {
+            m.voice.warned = true;
+            toast('连不上 CloneTTS 的 8080 端口，点气泡可以用系统朗读');
           }
           m.voice.state = 'fail';
           toast('语音合成失败：' + m.voice.error + '（点气泡用系统朗读）');
