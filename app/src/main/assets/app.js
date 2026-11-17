@@ -648,7 +648,7 @@
     if (waiting) {
       body.innerHTML = waitingHtml();
     } else {
-      body.innerHTML = md(stripSearchDisplay(stripEmo(m.content))) + (m.streaming ? '<span class="caret"></span>' : '');
+      body.innerHTML = md(stripSearchDisplay(stripEmo(stripCtrlTags(m.content)))) + (m.streaming ? '<span class="caret"></span>' : '');
     }
     // 必须在 innerHTML 之后插入，否则会被覆盖
     if (showPeek) {
@@ -708,7 +708,7 @@
       if (d.open) state.thinkOpen[m.id] = 1;
       else delete state.thinkOpen[m.id];
     });
-    d.querySelector('.think-body').textContent = m.reasoning || '';
+    d.querySelector('.think-body').textContent = stripCtrlTags(m.reasoning || '');
     return d;
   }
 
@@ -771,7 +771,7 @@
       if (m.streaming && !(m.content || '').trim()) {
         body.innerHTML = waitingHtml();
       } else {
-        body.innerHTML = md(stripSearchDisplay(stripEmo(m.content))) + (m.streaming ? '<span class="caret"></span>' : '');
+        body.innerHTML = md(stripSearchDisplay(stripEmo(stripCtrlTags(m.content)))) + (m.streaming ? '<span class="caret"></span>' : '');
       }
       if (keepPeek) body.insertBefore(keepPeek, body.firstChild);
     }
@@ -784,7 +784,7 @@
       }
       if (think) {
         var tb = think.querySelector('.think-body');
-        if (tb) tb.textContent = m.reasoning;
+        if (tb) tb.textContent = stripCtrlTags(m.reasoning || '');
         var sm = think.querySelector('summary');
         if (sm) sm.textContent = (m.streaming && !(m.content || '').trim()) ? '思考中…（点开看）' : '思考过程';
       }
@@ -1029,7 +1029,9 @@
           // 只回放说过的话，不加「（语音）」前缀：否则模型会学着在正文里写这个标记来假装发语音
           out.push({ role: 'assistant', content: m.voice.text });
         } else if (m.content && m.content.trim() && !m.error) {
-          out.push({ role: 'assistant', content: stripSearchDisplay(m.content) });
+          // 回灌历史时把 <<remember …>> / <<mood …>> 这类控制标记摘掉：
+          // 否则模型会学着在正文里写它们，标记越积越多
+          out.push({ role: 'assistant', content: stripSearchDisplay(stripCtrlTags(m.content)) });
         }
       } else if (m.role === 'tool') {
         if (m.pending) continue;
@@ -1793,6 +1795,22 @@
   }
 
   /**
+   * 模型写出来的控制标记（<<remember …>> / <<mood …>> / <<camera>> 之类）一律不给人看。
+   * 注意：只用于「展示」和「回灌历史」，正文原样保留给情趣版联动去解析。
+   */
+  var CTRL_WORDS = 'remember|mood|emo|camera|photo|snapshot|compass|level|voice|audio|sticker|sleep|wake';
+  var CTRL_TAG_RE = new RegExp('<<\\s*(?:' + CTRL_WORDS + ')\\b[^<>\\n]{0,240}?>>', 'gi');
+  var CTRL_HALF_RE = new RegExp('<<\\s*(?:' + CTRL_WORDS + ')\\b[^<>\\n]{0,240}$', 'i');
+
+  function stripCtrlTags(text) {
+    if (!text) return text || '';
+    var out = String(text).replace(CTRL_TAG_RE, '');
+    out = out.replace(CTRL_HALF_RE, '');   // 流式过程中还没闭合的半截
+    out = out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+    return out.replace(/\s+$/, '');
+  }
+
+  /**
    * 兜底：模型没调 send_voice，却在正文最前面写了「（语音）…」——
    * 把它当成真的要发语音，标记后面的正文当语音内容。
    * 只认「标记＋内容」这种形状，"（语音）" 单独一行则不认（避免把正常括号词吃掉）。
@@ -1900,7 +1918,11 @@
     var s = state.cur;
     if (!s || !call) return false;
     var node = addMemory(s, call);
-    if (!node) return false;
+    if (!node) {
+      // 重复内容，没写；如果这轮只有工具调用没有正文，就别留一个空气泡
+      if (!(assistantMsg.content || '').trim()) assistantMsg.hidden = true;
+      return false;
+    }
     persist(true);
     if (state.open.side) renderTree();
     dbg('remember', node.emotion + '/' + node.weight);
@@ -2387,6 +2409,13 @@
       var root = { id: uid(), parentId: '', branch: br, emotion: emo || '初见', weight: w, ts: ts, events: [] };
       t.nodes.push(root);
       if (!sum) return root;
+    }
+    // 去重：最近 8 个节点里已经有完全一样的（情绪 + 概括 + 标签），就不再写一遍
+    var win = Math.min(8, t.nodes.length);
+    for (var di = t.nodes.length - 1; di >= t.nodes.length - win && di >= 0; di--) {
+      var dn = t.nodes[di];
+      var dsum = (dn.events && dn.events.length) ? dn.events[dn.events.length - 1].text : '';
+      if (dn.emotion === emo && (dn.branch || '') === br && dsum === sum) return null;
     }
     // 父节点：显式 parentId > 同 branch 标签最近的节点 > 树根（新分支从根分出来）> 最新一步。
     var parent = treeById(s, p.parentId) || null;
@@ -4366,7 +4395,7 @@
       var c = chunkText(o.c);
       if (r) m.reasoning = (m.reasoning || '') + r;
       if (c) m.content = (m.content || '') + c;
-      if (m.content && m.content.indexOf('<<') >= 0) m.content = stripDeviceTags(m.content);
+      // 标记只在展示层过滤，正文保留原样（onDone 还要解析 <<camera>> 这类兜底指令）
       scheduleNodeUpdate(m);
     },
 
