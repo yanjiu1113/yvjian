@@ -1959,7 +1959,10 @@
     var playing = state.voicePlaying === m.id;
     var ms = Math.max(0, v.ms || 0);
     var sec = Math.max(1, Math.round(ms / 1000));
-    var w = Math.max(96, Math.min(240, 88 + sec * 16));
+    // 气泡里不放任何文字：宽度只跟时长走（合成中先用一个中等宽度）
+    var w = v.state === 'ready' && ms > 0
+      ? Math.max(88, Math.min(260, 74 + sec * 18))
+      : 104;
 
     var box = document.createElement('div');
     box.className = 'voice-msg' + (v.state === 'synth' ? ' synth' : '') +
@@ -1977,14 +1980,9 @@
     }
     box.appendChild(bars);
 
-    var dur = document.createElement('span');
-    dur.className = 'v-dur';
-    if (v.state === 'synth') dur.textContent = '合成中…';
-    else if (v.state === 'fail') dur.textContent = '点一下用系统朗读';
-    else dur.textContent = sec + '″';
-    box.appendChild(dur);
-
-    box.title = v.text || '';
+    // 文字只留在 title 里（长按/悬停才看见），气泡本身干净
+    box.title = (v.state === 'fail' ? '没合成成功，点一下用系统朗读' : '点一下播放') +
+      (v.text ? '\n' + v.text : '');
     return box;
   }
 
@@ -4114,9 +4112,27 @@
           m.voice.ms = Number(o.ms) || 0;
           m.voice.kb = Number(o.kb) || 0;
         } else {
-          m.voice.state = 'fail';
           m.voice.error = o.error || '合成失败';
-          toast('语音合成失败：' + m.voice.error);
+          // 大概率是 CloneTTS 没在跑：拉起它，然后重试一次
+          if (o.needApp && !m.voice.retried) {
+            m.voice.retried = true;
+            m.voice.state = 'synth';
+            toast('CloneTTS 好像没在运行，正在打开它…');
+            try { Native.openCloneTts(); } catch (e) {}
+            renderMessages();
+            var retryId = m.id, retryText = m.voice.text;
+            setTimeout(function () {
+              var mm = findVoiceMsg(retryId);
+              if (!mm || mm.voice.state === 'ready') return;
+              try {
+                Native.voiceSynth(retryId, retryText,
+                  (state.tts && state.tts.voice) || '', (state.tts && state.tts.rate) || 1.0);
+              } catch (e) {}
+            }, 4500);
+            return;
+          }
+          m.voice.state = 'fail';
+          toast('语音合成失败：' + m.voice.error + '（点气泡用系统朗读）');
         }
         renderMessages();
         persist(true);

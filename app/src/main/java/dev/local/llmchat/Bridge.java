@@ -160,6 +160,23 @@ public class Bridge {
         }
     }
 
+    /** 语音服务连不上时，试着把 CloneTTS 拉起来（只开它自己的界面，不做别的）。 */
+    @JavascriptInterface
+    public void openCloneTts() {
+        try {
+            Intent i = act.getPackageManager().getLaunchIntentForPackage("com.sipeter.clonetts");
+            if (i != null) {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                act.startActivity(i);
+                emitToast("正在打开 CloneTTS…");
+            } else {
+                emitToast("没找到 CloneTTS，先装一个再来");
+            }
+        } catch (Throwable t) {
+            emitToast("打不开 CloneTTS：" + t.getClass().getSimpleName());
+        }
+    }
+
     public Bridge(Activity a, WebView w) {
         this.act = a;
         this.web = w;

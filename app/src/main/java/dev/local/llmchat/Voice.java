@@ -69,7 +69,8 @@ public class Voice {
             final String e2 = err;
             main.post(() -> {
                 if (file == null) {
-                    fail(id, e2.isEmpty() ? "合成失败" : e2);
+                    boolean noApp = e2 != null && e2.contains("连不上语音服务");
+                    fail(id, e2 == null || e2.isEmpty() ? "合成失败" : e2, noApp);
                     return;
                 }
                 int ms = durationOf(file);
@@ -127,11 +128,16 @@ public class Voice {
     }
 
     private void fail(String id, String why) {
+        fail(id, why, false);
+    }
+
+    private void fail(String id, String why, boolean needApp) {
         JSONObject o = new JSONObject();
         try {
             o.put("id", id);
             o.put("ok", false);
             o.put("error", why);
+            if (needApp) o.put("needApp", true);
         } catch (Exception ignored) {
         }
         sink.emit("onVoice", o);
