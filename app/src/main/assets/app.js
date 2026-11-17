@@ -1403,9 +1403,10 @@
         var pEmo = parsed ? String(parsed.emotion || parsed.mood || '').trim() : '';
         var pSum = parsed ? String(parsed.summary || parsed.event || '').trim() : '';
         var pPar = parsed ? String(parsed.parent || parsed.parentId || '').trim() : '';
+        var pBr = parsed ? String(parsed.branch || parsed.topic || '').trim().slice(0, 12) : '';
         var pW = parsed ? Number(parsed.weight) : 0;
         if (pEmo || pSum) {
-          return { kind: 'tree', id: t.id || '', emotion: pEmo.slice(0, 12), summary: pSum.slice(0, 240), parentId: pPar, weight: pW };
+          return { kind: 'tree', id: t.id || '', emotion: pEmo.slice(0, 12), summary: pSum.slice(0, 240), parentId: pPar, branch: pBr, weight: pW };
         }
         continue;
       }
@@ -2379,18 +2380,27 @@
     var emo = String(p.emotion || '').trim().slice(0, 12);
     var w = Math.max(1, Math.min(100, Math.round(Number(p.weight) || 50)));
     var sum = String(p.summary || '').trim().slice(0, 240);
+    var br = String(p.branch || '').trim().slice(0, 12);
     if (!emo && !sum) return null;
     var ts = now();
-    var node = null;
     if (!t.nodes.length) {
-      node = { id: uid(), parentId: '', emotion: emo || '初见', weight: w, ts: ts, events: [] };
-      t.nodes.push(node);
-      if (!sum) return node;
+      var root = { id: uid(), parentId: '', branch: br, emotion: emo || '初见', weight: w, ts: ts, events: [] };
+      t.nodes.push(root);
+      if (!sum) return root;
     }
-    var parent = treeById(s, p.parentId) || t.nodes[t.nodes.length - 1] || null;
+    // 父节点：显式 parentId > 同 branch 标签最近的节点 > 树根（新分支从根分出来）> 最新一步。
+    var parent = treeById(s, p.parentId) || null;
+    if (!parent && br) {
+      for (var bi = t.nodes.length - 1; bi >= 0; bi--) {
+        if (t.nodes[bi].branch === br) { parent = t.nodes[bi]; break; }
+      }
+      if (!parent) parent = t.nodes[0] || null;
+    }
+    if (!parent) parent = t.nodes[t.nodes.length - 1] || null;
     var child = {
       id: uid(),
       parentId: parent ? parent.id : '',
+      branch: br || '',
       emotion: emo || (parent ? parent.emotion : '未命名'),
       weight: w,
       ts: ts,
@@ -2465,6 +2475,7 @@
       html += '<div class="tree-node' + (open ? ' open' : '') + '" data-node="' + n.id + '" style="left:' + p.x + 'px;top:' + p.y + 'px;width:' + W + 'px">' +
         '<div class="tn-emo">' + esc(n.emotion || '') + '</div>' +
         '<div class="tn-bar"><i style="width:' + w + '%"></i></div>' +
+        (n.branch ? '<div class="tn-branch">' + esc(n.branch) + '</div>' : '') +
         '<div class="tn-time">' + fmtClock(n.ts) + ' · ' + w + '</div>' +
         (open ? '<div class="tn-events">' + ((n.events && n.events.length)
           ? n.events.map(function (ev) {
@@ -2485,8 +2496,9 @@
         description: '把这一刻写进「情感记忆树」。这棵树完全由你维护，对方只能看、不能写。' +
           '值得记住的情绪或事件出现时就调用它。emotion 是 2-6 个字的情绪词；weight 是这件事在你心里的分量 1-100；' +
           'summary 是**你自己概括**的事件（一两句、40 字以内，不要抄原话）。' +
-          '树为空时第一次调用会自动长出根节点（只有情感和时间，没有事件）；' +
-          'parent 可选：填某个节点 id 表示这一步是从那里分出来的，不填就接在最新的一步上面。' +
+          '树为空时第一次调用会自动长出根节点（只有情感和时间，没有事件）。' +
+          '想分叉就用 branch：给它贴一个简短的主题标签（例如 家庭 / 工作 / 那段回忆），同标签会长在同一条枝上；换一个标签就从树根上另分出一条枝。' +
+          '不填 branch 就默认接在最新一步上面。' +
           '同一轮里不要连续调用超过两次。',
         parameters: {
           type: 'object',
@@ -2494,7 +2506,7 @@
             emotion: { type: 'string', description: '2-6 个字的情绪词，例如 心动 / 委屈 / 安心 / 心疼 / 戒备' },
             weight: { type: 'integer', description: '分量 1-100，越大越接近主干' },
             summary: { type: 'string', description: '你自己概括的事件，一两句、40 字以内' },
-            parent: { type: 'string', description: '可选，父节点 id' }
+            branch: { type: 'string', description: '可选，简短主题标签；换一个标签就从树根上另起一条枝' }
           },
           required: ['emotion']
         }
