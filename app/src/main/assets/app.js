@@ -546,8 +546,8 @@
       wrap.className = 'msg tool';
       var card = document.createElement('div');
       card.className = 'tool-card' + (m.pending ? ' pending' : '');
-      var DEV_ICON = { photo: '📷', compass: '🧭', level: '📐', sticker: '🖼️', task: '⏰' };
-      var DEV_NAME = { photo: '拍照', compass: '指南针', level: '水平仪', sticker: '表情包', task: '定时任务' };
+      var DEV_ICON = { photo: '📷', compass: '🧭', level: '📐', sticker: '🖼️', task: '⏰', tree: '💠', memory: '🧠' };
+      var DEV_NAME = { photo: '拍照', compass: '指南针', level: '水平仪', sticker: '表情包', task: '定时任务', tree: '记忆', memory: '回忆' };
       var head;
       if (m.device) {
         var ic = DEV_ICON[m.device] || '📱';
@@ -1035,6 +1035,14 @@
         }
       } else if (m.role === 'tool') {
         if (m.pending) continue;
+        if (m.device === 'memory') {
+          out.push({
+            role: 'user',
+            content: '【你自己的记忆】\n' + (m.content || '（什么都没有记下）') +
+              '\n\n以上是你以前写进记忆树的东西，只有你能看见。按需要自然地提及，不要逐条复述，也不要说"根据我的记忆数据"这种话。'
+          });
+          continue;
+        }
         if (m.device) {
           var dLabel = { photo: '【照片】', compass: '【指南针】', level: '【水平仪】' }[m.device] || '【设备结果】';
           var dBody = m.error ? ('失败：' + m.error) : (m.content && m.content.trim() ? m.content : '（没有数据）');
@@ -1361,6 +1369,7 @@
     }
     if (s && toolOn(s, 'schedule_task')) list = list.concat(taskTools());
     if (s && toolOn(s, 'remember')) list = list.concat(treeTools());
+    if (s && toolOn(s, 'recall')) list = list.concat(recallTools());
     if (s && toolOn(s, 'send_voice')) list = list.concat(voiceTools());
     return list;
   }
@@ -1390,6 +1399,15 @@
           seconds: Math.min(86400, Math.round(secs)),
           prompt: pr,
           label: parsed ? String(parsed.label || '').trim() : ''
+        };
+      }
+      if (name === 'recall') {
+        var lim = parsed ? Number(parsed.limit) : 0;
+        return {
+          kind: 'memread',
+          id: t.id || '',
+          branch: parsed ? String(parsed.branch || '').trim().slice(0, 24) : '',
+          limit: (lim > 0) ? Math.min(40, Math.round(lim)) : 8
         };
       }
       if (name === 'send_voice') {
@@ -1938,6 +1956,67 @@
     return true;
   }
 
+  function recallTools() {
+    return [{
+      type: 'function',
+      function: {
+        name: 'recall',
+        description: '翻开你自己的「情感记忆树」，看看以前记下过什么。这棵树只有你能读、也只有你能写。' +
+          '当对方提到过去的事、你觉得该想起点什么、或者想确认某件事在你心里的分量时，就调用它。' +
+          '读不读完全由你决定——没人会替你翻。' +
+          '返回的是你自己当初写下的情绪和概括，不是原话。',
+        parameters: {
+          type: 'object',
+          properties: {
+            branch: { type: 'string', description: '可选，只翻某一条枝（主题标签），不填就翻最近的几条' },
+            limit: { type: 'integer', description: '翻几条，默认 8，最多 40' }
+          },
+          required: []
+        }
+      }
+    }];
+  }
+
+  /** 把记忆树摘成一段给模型看的文本（最近的在前）。 */
+  function memoryDigest(s, call) {
+    var t = treeOf(s);
+    var nodes = t.nodes.slice();
+    if (call && call.branch) {
+      nodes = nodes.filter(function (n) { return (n.branch || '') === call.branch; });
+    }
+    if (!nodes.length) return '';
+    var lim = (call && call.limit) ? call.limit : 8;
+    nodes = nodes.slice(-lim).reverse();
+    var lines = nodes.map(function (n, i) {
+      var ev = (n.events && n.events.length) ? n.events[n.events.length - 1].text : '（只记了情绪，没记具体的事）';
+      return (i + 1) + '. [' + fmtStamp(n.ts) + '] ' + (n.branch ? n.branch + ' · ' : '') +
+        n.emotion + '（分量 ' + n.weight + '）——' + ev;
+    });
+    var total = t.nodes.length;
+    var head = '记忆树上一共 ' + total + ' 条，这里是最近的 ' + nodes.length + ' 条（新的在前）：';
+    return head + '\n' + lines.join('\n');
+  }
+
+  /** 模型调用了 recall：把记忆摘给它看，然后让它接着说。 */
+  function runRecallStep(assistantMsg, call) {
+    var s = state.cur;
+    if (!s || !call) return false;
+    var text = memoryDigest(s, call);
+    dbg('recall', { branch: call.branch || '', limit: call.limit, hit: !!text });
+    assistantMsg.streaming = false;
+    state.streamingId = null;
+    s.messages.push({
+      id: uid(), role: 'tool', device: 'memory', pending: false, ts: now(),
+      content: text || '（记忆树还是空的，你还没记下任何事）'
+    });
+    if (!(assistantMsg.content || '').trim()) assistantMsg.hidden = true;
+    renderMessages();
+    renderComposer();
+    persist(true);
+    continueAfterSearch();
+    return true;
+  }
+
   function runTaskStep(assistantMsg, call) {
     var s = state.cur;
     if (!s) return false;
@@ -2300,7 +2379,8 @@
     { key: 'send_sticker', label: '发表情包', desc: '关掉后模型不能再发表情（自动表情总闸也要开着）' },
     { key: 'send_voice', label: '发语音', desc: '模型可以自己决定发一条语音气泡；需要装好 CloneTTS' },
     { key: 'schedule_task', label: '定时任务', desc: '允许模型自己定一个到点提醒；应用彻底关掉后可能丢' },
-    { key: 'remember', label: '情感记忆树', desc: '允许模型把情绪与事件记到右侧那棵树里；她只写，你只能看' }
+    { key: 'remember', label: '情感记忆树', desc: '允许模型把情绪与事件记到右侧那棵树里；她只写，你只能看' },
+    { key: 'recall', label: '回忆（读记忆树）', desc: '允许模型自己翻看记忆树；读不读、什么时候读，由她决定' }
   ];
 
   /** 一行摘要，给设置页显示。 */
@@ -4446,6 +4526,10 @@
           if (call && call.kind === 'tree') {
             m.toolCalls = o.tools;
             if (runTreeStep(m, call)) return;
+          }
+          if (call && call.kind === 'memread') {
+            m.toolCalls = o.tools;
+            if (runRecallStep(m, call)) return;
           }
           if (call && call.kind === 'device') {
             m.toolCalls = o.tools;
