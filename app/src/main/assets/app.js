@@ -1352,7 +1352,9 @@
     '之后你就能看到画面、知道朝向。『看看这里』『我朝哪边』『放平了没有』这类请求直接调用即可，' +
     '不要回答"我看不到""我没有摄像头"——那是旧印象，现在你能。\n' +
     '拍照前先在正文里问一句并等对方同意（例：「我想看看你，可以吗」），没问就调会被客户端拦下。' +
-    '指南针与水平仪不涉及隐私，随时可读。';
+    '指南针与水平仪不涉及隐私，随时可读。\n' +
+    '如果你的接口不支持函数调用、或者调不动工具，就改在正文里写标记，客户端会替你执行并回结果：' +
+    '<<camera>> 或 <<camera front>>（前置）、<<compass>>、<<level>>。标记会从正文里被去掉，对方看不到。';
 
   var PET_RULE =
     '【隐藏信号】每条回复的最后一行，输出一个不可见的情绪标记（主人看不到，不要解释）：\n' +
@@ -1567,6 +1569,17 @@
   /** 原生把拍照/传感器结果送回来。 */
   window.__bridge = window.__bridge || {};
   window.__bridge.onDevice = function (raw) {
+    try {
+      handleDeviceResult(raw);
+    } catch (e) {
+      try { Native.toast('设备结果处理出错：' + (e && e.message ? e.message : e)); } catch (err) { }
+      dbg('device-error', { msg: String((e && e.message) || e) });
+      state.probing = false;
+      state.pendingDevice = null;
+    }
+  };
+
+  function handleDeviceResult(raw) {
     var o;
     try {
       o = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -1609,7 +1622,34 @@
     renderMessages();
     persist(true);
     continueAfterSearch();
-  };
+  }
+
+  /** 文本标记兜底：<<camera back>> / <<camera front>> / <<compass>> / <<level>> */
+  var DEVICE_TAG_RE = /<<\s*(camera|photo|snapshot|compass|level)\b([^>]*)>>/i;
+
+  function parseDeviceTag(text) {
+    var mt = DEVICE_TAG_RE.exec(text || '');
+    if (!mt) return null;
+    var word = String(mt[1]).toLowerCase();
+    var dev = (word === 'compass' || word === 'level') ? word : 'photo';
+    var arg = mt[2] || '';
+    var facing = /front|前置|自拍|selfie/i.test(arg) ? 'front' : 'back';
+    return {
+      kind: 'device',
+      dev: dev,
+      name: DEVICE_TOOLS ? (dev === 'photo' ? 'take_photo' : (dev === 'compass' ? 'read_compass' : 'read_level')) : 'take_photo',
+      facing: facing,
+      id: 'tag_' + now()
+    };
+  }
+
+  function stripDeviceTags(text) {
+    return String(text || '')
+      .replace(/<<\s*(camera|photo|snapshot|compass|level)\b[^>]*>>/gi, '')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
 
   function describeDevice(o) {
     if (o.error) return '';
@@ -3686,6 +3726,7 @@
       var c = chunkText(o.c);
       if (r) m.reasoning = (m.reasoning || '') + r;
       if (c) m.content = (m.content || '') + c;
+      if (m.content && m.content.indexOf('<<') >= 0) m.content = stripDeviceTags(m.content);
       scheduleNodeUpdate(m);
     },
 
@@ -3709,6 +3750,16 @@
         m.streaming = false;
 
         // ① 原生 tool_calls（搜索 / 发表情 / 手机硬件）
+        if (!m.error && !(o.tools && o.tools.length)) {
+          // 服务商不支持 function calling 时的兜底：模型在正文里写 <<camera back>> 这类标记
+          var tagCall = parseDeviceTag(m.content || '');
+          if (tagCall) {
+            m.content = stripDeviceTags(m.content || '');
+            renderMessages();
+            dbg('device-tag', tagCall.dev + '/' + (tagCall.facing || ''));
+            if (runDeviceStep(m, tagCall)) return;
+          }
+        }
         if (!m.error && o.tools && o.tools.length) {
           var call = parseToolCall(o.tools);
           if (call && call.kind === 'search' && state.cur && state.cur.webSearch) {

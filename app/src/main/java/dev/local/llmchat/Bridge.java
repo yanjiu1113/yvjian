@@ -73,25 +73,44 @@ public class Bridge {
         emit("onDevice", p);
     }
 
+    /** 原生侧抛异常时也要给页面一个结果，否则 JS 只会看到一句 "Script error." */
+    private void deviceCall(String kind, Runnable r) {
+        main.post(() -> {
+            try {
+                r.run();
+            } catch (Throwable t) {
+                try {
+                    JSONObject p = new JSONObject();
+                    p.put("kind", kind);
+                    p.put("error", "原生出错：" + t.getClass().getSimpleName() + " " +
+                            (t.getMessage() == null ? "" : t.getMessage()));
+                    emitDevice(p);
+                } catch (Exception ignored) {
+                }
+            }
+        });
+    }
+
     @JavascriptInterface
     public void takePhoto() {
-        main.post(() -> devices().takePhoto(""));
+        deviceCall("photo", () -> devices().takePhoto(""));
     }
 
     /** facing = "front"（自拍）或 "back"（后置）。 */
     @JavascriptInterface
     public void takePhoto2(String facing) {
-        main.post(() -> devices().takePhoto("", facing));
+        final String f = facing;
+        deviceCall("photo", () -> devices().takePhoto("", f));
     }
 
     @JavascriptInterface
     public void readCompass() {
-        main.post(() -> devices().readCompass());
+        deviceCall("compass", () -> devices().readCompass());
     }
 
     @JavascriptInterface
     public void readLevel() {
-        main.post(() -> devices().readLevel());
+        deviceCall("level", () -> devices().readLevel());
     }
 
     public Bridge(Activity a, WebView w) {
