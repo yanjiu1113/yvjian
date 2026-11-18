@@ -510,39 +510,6 @@
     col.className = 'col';
 
     if (m.role === 'user') {
-      if (m.kind === 'file' && m.file) {
-        // 参考材料：只放一张文件卡，内容整段留给模型看，不铺成对话
-        var ic = document.createElement('div');
-        ic.className = 'file-msg';
-        ic.setAttribute('data-act', 'file');
-        ic.setAttribute('data-fid', m.file.id || '');
-        var ico = document.createElement('div');
-        ico.className = 'file-ico';
-        ico.textContent = '📄';
-        var meta = document.createElement('div');
-        meta.className = 'file-meta';
-        var fn = document.createElement('div');
-        fn.className = 'file-name';
-        fn.textContent = m.file.name || '参考材料';
-        var fs = document.createElement('div');
-        fs.className = 'file-sub';
-        fs.textContent = (m.file.kb ? m.file.kb + ' KB · ' : '') + '已作为参考材料，模型能看到全文';
-        meta.appendChild(fn);
-        meta.appendChild(fs);
-        ic.appendChild(ico);
-        ic.appendChild(meta);
-        col.appendChild(ic);
-        if (timeOn() && m.ts) {
-          var ft = document.createElement('div');
-          ft.className = 'msg-time';
-          ft.textContent = fmtClock(m.ts);
-          col.appendChild(ft);
-        }
-        inner.appendChild(col);
-        inner.appendChild(avatarEl('user'));
-        wrap.appendChild(inner);
-        return wrap;
-      }
       if (m.images && m.images.length) {
         var imgs = document.createElement('div');
         imgs.className = 'imgs';
@@ -783,7 +750,17 @@
       return;
     }
 
-    s.messages.forEach(function (m) { if (!m.hidden) box.appendChild(msgNode(m)); });
+    var impN = 0;
+    s.messages.forEach(function (m) {
+      if (m.imp) { impN++; return; }        // 导进来的历史只给模型看，不铺气泡
+      if (!m.hidden) box.appendChild(msgNode(m));
+    });
+    if (impN) {
+      var note = document.createElement('div');
+      note.className = 'imp-note';
+      note.textContent = '已载入 ' + impN + ' 条历史（不显示，只给模型看）';
+      box.insertBefore(note, box.firstChild);
+    }
     var bgNow = state.meta.chatBackground || {};
     if (!bgNow.image && IMAGE_BG[bgNow.preset]) ensureParticles(IMAGE_BG[bgNow.preset].kind);
     scrollBottom(true);
@@ -1054,18 +1031,6 @@
       if (m.role === 'user') {
         var hasText = !!(m.content && m.content.trim());
         var tPfx = (timeOn() && m.ts) ? ('[' + fmtStamp(m.ts) + '] ') : '';
-        // 参考材料（导入的对话日志之类）：把全文递给模型，界面上只显示一张文件卡
-        if (m.kind === 'file' && m.file) {
-          var body = materialText(m.file);
-          if (body) {
-            out.push({
-              role: 'user',
-              content: '（我上传了一份参考材料，文件名：' + (m.file.name || '未命名') +
-                '。下面是它的全文，读它、记它，但不要逐字复述，也不要说“根据材料显示”这种话。）\n\n' + body
-            });
-          }
-          continue;
-        }
         // 定时任务这类系统自己塞进来的触发语：给模型看，但明确标成"不是对方说的话"
         if (hasText && m.hidden) {
           out.push({
@@ -4395,7 +4360,7 @@
     var title = String(s.title || '对话').replace(/[#*_`>]/g, '').trim() || '对话';
     var cnt = 0;
     s.messages.forEach(function (m) {
-      if (m.hidden) return;
+      if (m.hidden || m.imp) return;
       if (m.role === 'user' && (m.content || '').trim()) cnt++;
       if (m.role === 'assistant' && ((m.content || '').trim() || (m.kind === 'voice' && m.voice && m.voice.text))) cnt++;
     });
@@ -4404,18 +4369,11 @@
     out.push('> 导出自语见 · ' + nowText() + ' · 共 ' + cnt + ' 条');
     out.push('');
     s.messages.forEach(function (m) {
-      if (m.hidden) return;
+      if (m.hidden || m.imp) return;
       var when = '';
       if (timeOn() && m.ts) when = ' · ' + fmtStamp(m.ts);
       if (m.role === 'user') {
         var ut = (m.content || '').trim();
-        if (m.kind === 'file' && m.file) {
-          out.push('### 我' + when + ' · 附件');
-          out.push('');
-          out.push('（参考材料：' + (m.file.name || '未命名') + '，正文见原文件）');
-          out.push('');
-          return;
-        }
         if (!ut) return;
         out.push('### 我' + when);
         out.push('');
@@ -4508,11 +4466,20 @@
     return '';
   }
 
+  /** 光秃秃的时间戳（2026-11-17T04:26:04.613Z、1712345678）不算正文。 */
+  function looksLikeStamp(s) {
+    var t = String(s || '').trim();
+    if (!t) return true;
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/.test(t)) return true;
+    if (/^\d{10,13}$/.test(t)) return true;
+    return false;
+  }
+
   /** 兜底：在对象里翻出最长的一段字符串，认不出的格式也能把正文捞出来。 */
   function deepText(o, depth) {
     var d = depth || 0;
     if (d > 3 || o === null || o === undefined) return '';
-    if (typeof o === 'string') return o;
+    if (typeof o === 'string') return looksLikeStamp(o) ? '' : o;
     if (Array.isArray(o)) {
       var best = '';
       for (var i = 0; i < o.length; i++) {
@@ -4522,7 +4489,8 @@
       return best;
     }
     if (typeof o !== 'object') return '';
-    var skip = /^(id|role|type|model|kind|ts|time|createdAt|timestamp|name|title|author|from|sender|mime|url|path|state|status|finish_reason|index|usage|object|created|system_fingerprint)$/i;
+    // 思考过程、时间戳、元数据都不是正文
+    var skip = /^(id|role|type|model|kind|ts|time|createdAt|timestamp|name|title|author|from|sender|mime|url|path|state|status|finish_reason|index|usage|object|created|system_fingerprint|reasoning|reasoning_content|thinking|thought|thoughts|analysis|debug|meta|usage_stats|tokens)$/i;
     var found = '';
     for (var k in o) {
       if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
@@ -4540,12 +4508,20 @@
     if (!role) return null;
     var text = coerceText(m.content !== undefined ? m.content
       : (m.text !== undefined ? m.text : m.message));
+    if (!text) text = coerceText(m.data && m.data.content);
+    if (looksLikeStamp(text)) {
+      // 只捞到时间戳说明真正文在别的字段里
+      var alt = coerceText(m.data ? m.data.content : m.content);
+      text = looksLikeStamp(alt) ? '' : alt;
+    }
     if (!text) text = deepText(m, 0);
+    if (looksLikeStamp(text)) text = '';
     var out = {
       id: String(m.id || ('imp' + i + '_' + Math.random().toString(36).slice(2, 7))),
       role: role,
       content: text,
-      ts: Number(m.ts || m.time || m.createdAt || m.timestamp || 0) || 0
+      ts: Number(m.ts || m.time || m.createdAt || m.timestamp || 0) || 0,
+      imp: true            // 导入进来的历史：进上下文，但不铺成气泡
     };
     if (Array.isArray(m.images) && m.images.length) out.images = m.images;
     if (m.kind) out.kind = String(m.kind);
@@ -4564,67 +4540,6 @@
     for (var i = 0; i < keys.length; i++) if (Array.isArray(o[keys[i]])) return o[keys[i]];
     return null;
   }
-
-  /* ---------------- 参考材料：外部文件只当附件，不还原成对话 ---------------- */
-
-  var materialCache = {};
-  var MATERIAL_CAP = 60000;
-
-  /** 读一份材料的全文（超过上限就截断并注明），带一层内存缓存省钱。 */
-  function materialText(f) {
-    if (!f || !f.id) return '';
-    if (materialCache[f.id] !== undefined) return materialCache[f.id];
-    var text = '';
-    try { text = String(Native.loadImport(f.id) || ''); } catch (e) { text = ''; }
-    if (text.length > MATERIAL_CAP) {
-      text = text.slice(0, MATERIAL_CAP) + '\n\n（材料太长，后面还有 ' + (text.length - MATERIAL_CAP) + ' 个字符没有传给你。）';
-    }
-    materialCache[f.id] = text;
-    return text;
-  }
-
-  /** 这个 JSON 是不是语见自己导出的备份？只有备份才需要还原成会话。 */
-  function looksLikeOwnBackup(text) {
-    var obj;
-    try { obj = JSON.parse(text); } catch (e) { return false; }
-    if (!obj || typeof obj !== 'object') return false;
-    if (obj.app === 'llm-chat') return true;
-    var arr = Array.isArray(obj.sessions) ? obj.sessions : [obj];
-    for (var i = 0; i < arr.length && i < 3; i++) {
-      var s = arr[i];
-      if (!s || !Array.isArray(s.messages)) continue;
-      var mine = (s.providerId !== undefined || s.model !== undefined || s.temperature !== undefined || s.tree !== undefined);
-      var hasText = false;
-      for (var j = 0; j < s.messages.length && j < 8; j++) {
-        var mm = s.messages[j];
-        if (mm && typeof mm.content === 'string' && mm.content.trim()) { hasText = true; break; }
-      }
-      if (mine && hasText) return true;
-    }
-    return false;
-  }
-
-  /** 把外部文件挂成一条「参考材料」，正文存原生私有目录，会话里只留卡片。 */
-  function attachMaterial(name, text) {
-    var s = state.cur;
-    if (!s) return;
-    var id = uid();
-    var ok = '0';
-    try { ok = String(Native.saveImport(id, text)); } catch (e) { ok = '0'; }
-    if (ok !== '1') { toast('材料保存失败，可能空间不够'); return; }
-    materialCache[id] = '';
-    var chars = text.length;
-    s.messages.push({
-      id: uid(), role: 'user', kind: 'file', ts: now(),
-      file: { id: id, name: name || '参考材料', chars: chars, kb: Math.max(1, Math.round(chars / 1024)) }
-    });
-    if (!s.title || s.title === '新的对话') s.title = String(name || '参考材料').slice(0, 40);
-    renderMessages();
-    persist(true);
-    renderSessions();
-    toast('已附上参考材料：' + (name || '未命名') + '（' + Math.round(chars / 1024) + ' KB）');
-  }
-
   function importSessions(text) {    var obj;
     try { obj = JSON.parse(text); } catch (e) { toast('不是合法的 JSON 文件'); return; }
     var arr = [];
@@ -4700,6 +4615,49 @@
           (badN ? '（跳过 ' + badN + ' 个不认识的文件块）' : ''));
     dbg('import-ok', 'sessions=' + okN + ' msgs=' + msgN);
     if (firstId) openSession(firstId);
+  }
+
+  /**
+   * 把外部文件里的内容并进「当前会话」。
+   * 不新建会话、不铺成气泡：这些消息只进上下文，模型接着往下演，用户看的是自己的对话。
+   */
+  function mergeIntoCurrent(text) {
+    var obj;
+    try { obj = JSON.parse(text); } catch (e) { toast('不是合法的 JSON 文件'); return; }
+    var s = state.cur;
+    if (!s) return;
+
+    var src = pickMsgArray(obj);
+    if (!src) {
+      var arr = Array.isArray(obj) ? obj
+        : (obj && (obj.sessions || obj.conversations || obj.data)) || null;
+      if (Array.isArray(arr)) {
+        arr.forEach(function (it) {
+          var c = pickMsgArray(it);
+          if (c && (!src || c.length > src.length)) src = c;
+        });
+      }
+    }
+    if (!src || !src.length) { toast('文件里没找到消息'); return; }
+
+    var got = [];
+    src.forEach(function (raw, i) {
+      var mm = coerceMsg(raw, i);
+      if (!mm) return;
+      if (!(mm.content || '').trim() && !(mm.images && mm.images.length)) return;
+      got.push(mm);
+    });
+    if (!got.length) {
+      toast('这份文件里没有能用的正文（可能全是思考过程或时间戳）');
+      dbg('import-merge-empty', 'src=' + src.length);
+      return;
+    }
+
+    s.messages = got.concat(s.messages);
+    persist(true);
+    renderMessages();
+    toast('已并入当前对话：' + got.length + ' 条（不显示，只给模型看）');
+    dbg('import-merge', got.length + '条 | ' + String((obj && (obj.title || obj.name)) || ''));
   }
 
   // ---------------------------------------------------------------- native callbacks
@@ -5075,11 +5033,13 @@
     },
     onImported: function (raw) {
       var o = JSON.parse(raw);
-      var text = String(o.text || '');
-      var name = String(o.name || '导入的文件');
-      // 只有语见自己的备份才还原成会话；别人家的日志一律当参考材料挂着
-      if (looksLikeOwnBackup(text)) { importSessions(text); return; }
-      attachMaterial(name, text);
+      var txt = String(o.text || '');
+      var isBackup = false;
+      try {
+        var j = JSON.parse(txt);
+        isBackup = !!(j && j.app === 'llm-chat');
+      } catch (e) { }
+      if (isBackup) importSessions(txt); else mergeIntoCurrent(txt);
     },
 
     onSmallImage: function (raw) {
@@ -5454,14 +5414,6 @@
           e.preventDefault();
           toggleVoice(vb.getAttribute('data-vid') || '');
           return;
-        }
-        // 参考材料卡片：点一下说清它是给模型看的
-        var fb = e.target.closest('[data-act="file"]');
-        if (fb) {
-          e.preventDefault();
-          var fmsg = findMessage(fb.closest('.msg') ? fb.closest('.msg').dataset.id : '');
-          var fn = (fmsg && fmsg.file && fmsg.file.name) || '参考材料';
-          toast('「' + fn + '」是给模型看的参考材料，全文会一起发过去');
         }
         return;
       }
