@@ -4411,33 +4411,137 @@
     $('#ds-new').addEventListener('click', function () { closeSheet(); newSession(); });
   }
 
+  /** 把各种写法的正文（字符串 / 分段数组 / {text} 对象）统一成纯文本。 */
+  function coerceText(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (Array.isArray(v)) {
+      var parts = [];
+      v.forEach(function (p) {
+        if (typeof p === 'string') parts.push(p);
+        else if (p && typeof p === 'object') {
+          if (typeof p.text === 'string') parts.push(p.text);
+          else if (typeof p.content === 'string') parts.push(p.content);
+        }
+      });
+      return parts.join('');
+    }
+    if (typeof v === 'object') {
+      if (typeof v.text === 'string') return v.text;
+      if (typeof v.content === 'string') return v.content;
+    }
+    return '';
+  }
+
+  /** 认 human / ai / bot 这些别家的写法。 */
+  function coerceRole(r) {
+    var x = String(r || '').toLowerCase();
+    if (x === 'user' || x === 'human' || x === 'me' || x === '客户' || x === '我') return 'user';
+    if (x === 'assistant' || x === 'ai' || x === 'bot' || x === 'model' || x === 'gpt') return 'assistant';
+    return '';
+  }
+
+  /** 一条消息尽量救回来；实在不是对话消息就丢掉。 */
+  function coerceMsg(m, i) {
+    if (!m || typeof m !== 'object') return null;
+    var role = coerceRole(m.role || m.author || m.from || m.sender);
+    if (!role) return null;
+    var text = coerceText(m.content !== undefined ? m.content
+      : (m.text !== undefined ? m.text : m.message));
+    var out = {
+      id: String(m.id || ('imp' + i + '_' + Math.random().toString(36).slice(2, 7))),
+      role: role,
+      content: text,
+      ts: Number(m.ts || m.time || m.createdAt || m.timestamp || 0) || 0
+    };
+    if (Array.isArray(m.images) && m.images.length) out.images = m.images;
+    if (m.kind) out.kind = String(m.kind);
+    if (m.voice) out.voice = m.voice;
+    if (m.reasoning) out.reasoning = String(m.reasoning);
+    if (m.error) out.error = String(m.error);
+    if (m.searchQuery) out.searchQuery = String(m.searchQuery);
+    if (m.hidden) out.hidden = true;
+    return out;
+  }
+
+  /** 从各种外壳里取出消息数组。 */
+  function pickMsgArray(o) {
+    if (!o || typeof o !== 'object') return null;
+    var keys = ['messages', 'history', 'chat', 'turns', 'log', 'records'];
+    for (var i = 0; i < keys.length; i++) if (Array.isArray(o[keys[i]])) return o[keys[i]];
+    return null;
+  }
+
   function importSessions(text) {
     var obj;
     try { obj = JSON.parse(text); } catch (e) { toast('不是合法的 JSON 文件'); return; }
     var arr = [];
     if (Array.isArray(obj)) arr = obj;
     else if (obj && Array.isArray(obj.sessions)) arr = obj.sessions;
-    else if (obj && obj.messages) arr = [obj];
+    else if (obj && Array.isArray(obj.conversations)) arr = obj.conversations;
+    else if (obj && Array.isArray(obj.data)) arr = obj.data;
+    else if (pickMsgArray(obj)) arr = [obj];
     else { toast('文件里没有可导入的会话'); return; }
 
     var existing = {};
     state.sessions.forEach(function (s) { existing[s.id] = 1; });
 
-    var n = 0;
-    arr.forEach(function (s) {
-      if (!s || !Array.isArray(s.messages)) return;
+    var okN = 0, msgN = 0, emptyN = 0, firstId = '', badN = 0;
+    arr.forEach(function (raw) {
+      if (!raw || typeof raw !== 'object') { badN++; return; }
+      var src = pickMsgArray(raw);
+      if (!src) { badN++; return; }
+      var msgs = [];
+      for (var i = 0; i < src.length; i++) {
+        var mm = coerceMsg(src[i], i);
+        if (mm) msgs.push(mm);
+      }
+      if (!msgs.length) { emptyN++; return; }
+
+      // 保留原对象里的模型、温度之类设置，只覆盖必要字段
+      var s = raw;
       if (!s.id || existing[s.id]) s.id = uid();
       existing[s.id] = 1;
-      s.createdAt = s.createdAt || now();
-      s.updatedAt = s.updatedAt || now();
-      s.title = s.title || '导入的会话';
-      Native.saveSession(JSON.stringify(s));
-      n++;
+      s.messages = msgs;
+      s.createdAt = s.createdAt || (msgs[0].ts || now());
+      s.updatedAt = s.updatedAt || (msgs[msgs.length - 1].ts || now());
+      s.title = String(s.title || s.name || '导入的会话').slice(0, 60);
+      if (!s.tree || !Array.isArray(s.tree.nodes)) {
+        s.tree = (raw.memory && Array.isArray(raw.memory.nodes)) ? raw.memory : { nodes: [] };
+      }
+      delete s.history; delete s.chat; delete s.turns; delete s.log; delete s.records; delete s.conversations; delete s.data;
+
+      // 存完立刻读回来核对，别到用户点开才发现是空的
+      var back = 0;
+      try {
+        Native.saveSession(JSON.stringify(s));
+        var chk = JSON.parse(Native.loadSession(s.id) || '{}');
+        back = (chk.messages || []).length;
+      } catch (e) {
+        dbg('import-error', String(s.id) + ':' + (e && e.message));
+      }
+      if (!back) { badN++; return; }
+
+      okN++;
+      msgN += back;
+      if (!firstId) firstId = s.id;
+      dbg('import-one', s.title + '|' + back + '条|树' + ((s.tree.nodes || []).length));
     });
 
     refreshSessions();
     renderSessions();
-    toast('已导入 ' + n + ' 个会话');
+    if (!okN) {
+      toast('没导入成功：文件里 ' + arr.length + ' 个会话都没读到消息（' +
+            (emptyN ? emptyN + ' 个是空的；' : '') + (badN ? badN + ' 个格式不认识' : '') + '）');
+      dbg('import-fail', 'arr=' + arr.length + ' empty=' + emptyN + ' bad=' + badN);
+      return;
+    }
+    toast('已导入 ' + okN + ' 个会话、' + msgN + ' 条消息' +
+          (emptyN ? '（跳过 ' + emptyN + ' 个空会话）' : '') +
+          (badN ? '（跳过 ' + badN + ' 个不认识的文件块）' : ''));
+    dbg('import-ok', 'sessions=' + okN + ' msgs=' + msgN);
+    if (firstId) openSession(firstId);
   }
 
   // ---------------------------------------------------------------- native callbacks
