@@ -4328,6 +4328,89 @@
     }, null, 1));
   }
 
+  /* ---------------- 导入 / 导出（右上角那个按钮） ---------------- */
+
+  /** 把一个会话整理成 Markdown：只留人话，工具结果和控制标记都不带。 */
+  function sessionToMarkdown(s) {
+    var out = [];
+    var title = String(s.title || '对话').replace(/[#*_`>]/g, '').trim() || '对话';
+    var cnt = 0;
+    s.messages.forEach(function (m) {
+      if (m.hidden) return;
+      if (m.role === 'user' && (m.content || '').trim()) cnt++;
+      if (m.role === 'assistant' && ((m.content || '').trim() || (m.kind === 'voice' && m.voice && m.voice.text))) cnt++;
+    });
+    out.push('# ' + title);
+    out.push('');
+    out.push('> 导出自语见 · ' + nowText() + ' · 共 ' + cnt + ' 条');
+    out.push('');
+    s.messages.forEach(function (m) {
+      if (m.hidden) return;
+      var when = '';
+      if (timeOn() && m.ts) when = ' · ' + fmtStamp(m.ts);
+      if (m.role === 'user') {
+        var ut = (m.content || '').trim();
+        if (!ut) return;
+        out.push('### 我' + when);
+        out.push('');
+        out.push(ut);
+        out.push('');
+      } else if (m.role === 'assistant') {
+        var body = (m.kind === 'voice' && m.voice && m.voice.text)
+          ? '（语音）' + m.voice.text
+          : (m.content || '').trim();
+        if (!body) return;
+        out.push('### 语见' + when);
+        out.push('');
+        out.push(stripCtrlTags(stripSearchDisplay(body)));
+        out.push('');
+      }
+    });
+    return out.join('\n');
+  }
+
+  function safeName(s, ext) {
+    return (String((s && s.title) || 'chat').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60) || 'chat') + ext;
+  }
+
+  function exportCurrentJson() {
+    var s = state.cur;
+    if (!s) return;
+    Native.exportFile(safeName(s, '.json'), JSON.stringify(s, null, 1));
+    toast('已选择导出位置…');
+  }
+
+  function exportCurrentMarkdown() {
+    var s = state.cur;
+    if (!s) return;
+    Native.exportText(safeName(s, '.md'), 'text/markdown', sessionToMarkdown(s));
+    toast('已选择导出位置…');
+  }
+
+  function openDataSheet() {
+    var s = state.cur;
+    var n = 0;
+    if (s) s.messages.forEach(function (m) { if (!m.hidden && (m.role === 'user' || m.role === 'assistant')) n++; });
+    openSheet(
+      '<div class="section-title" style="margin-top:0">对话文件</div>' +
+      '<div class="card" style="padding:4px">' +
+      '<button class="btn block ghost" id="ds-import" style="text-align:left">导入对话（.json）</button>' +
+      '<button class="btn block ghost" id="ds-md" style="text-align:left">导出当前对话（Markdown）</button>' +
+      '<button class="btn block ghost" id="ds-json" style="text-align:left">导出当前对话（JSON）</button>' +
+      '<button class="btn block ghost" id="ds-all" style="text-align:left">导出全部会话（JSON 备份）</button>' +
+      '</div>' +
+      '<div class="dev-info" style="margin-top:10px">当前会话「' + esc((s && s.title) || '新会话') + '」· ' + n + ' 条消息</div>' +
+      '<div class="card" style="padding:4px;margin-top:10px">' +
+      '<button class="btn block ghost" id="ds-new" style="text-align:left">新建一个对话</button>' +
+      '</div>'
+    );
+    $('#ds-import').addEventListener('click', function () { closeSheet(); Native.importFile(); });
+    $('#ds-md').addEventListener('click', function () { closeSheet(); exportCurrentMarkdown(); });
+    $('#ds-json').addEventListener('click', function () { closeSheet(); exportCurrentJson(); });
+    $('#ds-all').addEventListener('click', function () { closeSheet(); exportAll(); });
+    $('#ds-new').addEventListener('click', function () { closeSheet(); newSession(); });
+  }
+
   function importSessions(text) {
     var obj;
     try { obj = JSON.parse(text); } catch (e) { toast('不是合法的 JSON 文件'); return; }
@@ -4871,7 +4954,7 @@
       });
     }
 
-    $('#btn-new').addEventListener('click', newSession);
+    $('#btn-new').addEventListener('click', openDataSheet);
     $('#btn-drawer-new').addEventListener('click', newSession);
     $('#btn-settings').addEventListener('click', openSettings);
     $('#btn-settings-back').addEventListener('click', closeSettings);

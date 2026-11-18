@@ -62,6 +62,7 @@ public class Bridge {
     private final StringBuilder allC = new StringBuilder();
     private final StringBuilder allR = new StringBuilder();
     private volatile String pendingExport = "";
+    private volatile String pendingMime = "application/json";
     private volatile String smallTag = "";
     private volatile int smallSize = 192;
     private volatile Devices devices;
@@ -834,12 +835,51 @@ public class Bridge {
 
     @JavascriptInterface
     public void exportFile(String name, String content) {
-        pendingExport = content;
+        exportText(name, "application/json", content);
+    }
+
+    /** 导出任意文本（.md / .txt / .json），由系统文件选择器决定落到哪。 */
+    @JavascriptInterface
+    public void exportText(String name, String mime, String content) {
+        pendingExport = content == null ? "" : content;
+        pendingMime = (mime == null || mime.isEmpty()) ? "text/plain" : mime;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("application/json");
+        i.setType(pendingMime);
         i.putExtra(Intent.EXTRA_TITLE, name);
         act.startActivityForResult(i, RC_EXPORT);
+    }
+
+    /**
+     * 发图片时打开相册而不是文件管理器。
+     * Android 13+ 用 Photo Picker（系统相册界面，不申请存储权限），
+     * 老系统退回 ACTION_PICK 直接进图库；两者都没有才退到文件选择器。
+     */
+    @JavascriptInterface
+    public void pickImage() {
+        Intent i = null;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                i = new Intent(android.provider.MediaStore.ACTION_PICK_IMAGES);
+                i.setType("image/*");
+            } else {
+                i = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+                i.setType("image/*");
+            }
+            if (i.resolveActivity(act.getPackageManager()) == null) i = null;
+        } catch (Throwable ignored) {
+            i = null;
+        }
+        if (i == null) {
+            i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("image/*");
+        }
+        try {
+            act.startActivityForResult(i, RC_IMAGE);
+        } catch (Throwable e) {
+            emitToast("打不开相册：" + e.getMessage());
+        }
     }
 
     @JavascriptInterface
@@ -849,14 +889,6 @@ public class Bridge {
         i.setType("*/*");
         i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/plain", "application/octet-stream"});
         act.startActivityForResult(i, RC_IMPORT);
-    }
-
-    @JavascriptInterface
-    public void pickImage() {
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("image/*");
-        act.startActivityForResult(i, RC_IMAGE);
     }
 
     /** Picks an image and returns it as a small (avatar / sticker sized) data URL. */
