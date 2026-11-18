@@ -1001,6 +1001,20 @@
 
   function buildHistory(s, excludeId) {
     var out = [];
+    // DeepSeek 系在思考模式下要求把上一轮的 reasoning_content 原样回传，否则 400。
+    // 撞过一次错就全局打开（state.reasoningBounce），之后每轮都带上。
+    var wantReason = !!state.reasoningBounce;
+    if (!wantReason) {
+      var mdl = String((s && s.model) || '').toLowerCase();
+      var base = '';
+      try { var pv = s && s.providerId ? provider(s.providerId) : null; base = String((pv && pv.baseUrl) || '').toLowerCase(); } catch (e) { }
+      wantReason = mdl.indexOf('deepseek') >= 0 || base.indexOf('deepseek') >= 0;
+    }
+    function asst(m, text) {
+      var o = { role: 'assistant', content: text };
+      if (m && m.reasoning && wantReason) o.reasoning_content = String(m.reasoning);
+      return o;
+    }
     for (var i = 0; i < s.messages.length; i++) {
       var m = s.messages[i];
       if (m.id === excludeId) break;
@@ -1027,11 +1041,11 @@
       } else if (m.role === 'assistant') {
         if (m.kind === 'voice' && m.voice && m.voice.text) {
           // 只回放说过的话，不加「（语音）」前缀：否则模型会学着在正文里写这个标记来假装发语音
-          out.push({ role: 'assistant', content: m.voice.text });
+          out.push(asst(m, m.voice.text));
         } else if (m.content && m.content.trim() && !m.error) {
           // 回灌历史时把 <<remember …>> / <<mood …>> 这类控制标记摘掉：
           // 否则模型会学着在正文里写它们，标记越积越多
-          out.push({ role: 'assistant', content: stripSearchDisplay(stripCtrlTags(m.content)) });
+          out.push(asst(m, stripSearchDisplay(stripCtrlTags(m.content))));
         }
       } else if (m.role === 'tool') {
         if (m.pending) continue;
@@ -4442,6 +4456,31 @@
     return '';
   }
 
+  /** 兜底：在对象里翻出最长的一段字符串，认不出的格式也能把正文捞出来。 */
+  function deepText(o, depth) {
+    var d = depth || 0;
+    if (d > 3 || o === null || o === undefined) return '';
+    if (typeof o === 'string') return o;
+    if (Array.isArray(o)) {
+      var best = '';
+      for (var i = 0; i < o.length; i++) {
+        var v = deepText(o[i], d + 1);
+        if (v.length > best.length) best = v;
+      }
+      return best;
+    }
+    if (typeof o !== 'object') return '';
+    var skip = /^(id|role|type|model|kind|ts|time|createdAt|timestamp|name|title|author|from|sender|mime|url|path|state|status|finish_reason|index|usage|object|created|system_fingerprint)$/i;
+    var found = '';
+    for (var k in o) {
+      if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
+      if (skip.test(k)) continue;
+      var s = deepText(o[k], d + 1);
+      if (s.length > found.length) found = s;
+    }
+    return found;
+  }
+
   /** 一条消息尽量救回来；实在不是对话消息就丢掉。 */
   function coerceMsg(m, i) {
     if (!m || typeof m !== 'object') return null;
@@ -4449,6 +4488,7 @@
     if (!role) return null;
     var text = coerceText(m.content !== undefined ? m.content
       : (m.text !== undefined ? m.text : m.message));
+    if (!text) text = deepText(m, 0);
     var out = {
       id: String(m.id || ('imp' + i + '_' + Math.random().toString(36).slice(2, 7))),
       role: role,
@@ -4487,17 +4527,24 @@
     var existing = {};
     state.sessions.forEach(function (s) { existing[s.id] = 1; });
 
-    var okN = 0, msgN = 0, emptyN = 0, firstId = '', badN = 0;
+    var okN = 0, msgN = 0, emptyN = 0, firstId = '', badN = 0, scanLogged = false;
     arr.forEach(function (raw) {
       if (!raw || typeof raw !== 'object') { badN++; return; }
       var src = pickMsgArray(raw);
       if (!src) { badN++; return; }
+      if (!scanLogged) {
+        scanLogged = true;
+        // 认不出格式时，这行日志就是唯一线索：把第一个会话的开头记下来
+        try { dbg('import-scan', arr.length + '个 | ' + JSON.stringify(raw).slice(0, 220)); } catch (e) { }
+      }
       var msgs = [];
       for (var i = 0; i < src.length; i++) {
         var mm = coerceMsg(src[i], i);
         if (mm) msgs.push(mm);
       }
       if (!msgs.length) { emptyN++; return; }
+      var withText = 0;
+      msgs.forEach(function (x) { if ((x.content || '').trim()) withText++; });
 
       // 保留原对象里的模型、温度之类设置，只覆盖必要字段
       var s = raw;
@@ -4526,7 +4573,7 @@
       okN++;
       msgN += back;
       if (!firstId) firstId = s.id;
-      dbg('import-one', s.title + '|' + back + '条|树' + ((s.tree.nodes || []).length));
+      dbg('import-one', s.title + '|' + back + '条|有字' + withText + '|树' + ((s.tree.nodes || []).length));
     });
 
     refreshSessions();
@@ -4851,9 +4898,23 @@
       var o = JSON.parse(raw);
       var m = o.id ? findMessage(o.id) : null;
       if (state.streamingId === o.id) state.streamingId = null;
+      // DeepSeek 思考模式要求把上一轮的 reasoning_content 原样回传：
+      // 撞到这个错就打开开关，同一轮自动重发一次，用户不必手动重试
+      var msgText = String(o.msg || '');
+      if (m && /reasoning_content/i.test(msgText) && !m.reasonBounced) {
+        m.reasonBounced = true;
+        m.error = '';
+        m.content = '';
+        state.reasoningBounce = true;
+        toast('服务商要求回传思考内容，已自动打开并重试');
+        renderMessages();
+        regenerate(m.id);
+        persist(true);
+        return;
+      }
       if (m) {
         m.streaming = false;
-        m.error = o.msg || '请求失败';
+        m.error = msgText || '请求失败';
         updateMessageNode(m);
       } else {
         toast(o.msg || '请求失败');
