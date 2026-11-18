@@ -510,6 +510,39 @@
     col.className = 'col';
 
     if (m.role === 'user') {
+      if (m.kind === 'file' && m.file) {
+        // 参考材料：只放一张文件卡，内容整段留给模型看，不铺成对话
+        var ic = document.createElement('div');
+        ic.className = 'file-msg';
+        ic.setAttribute('data-act', 'file');
+        ic.setAttribute('data-fid', m.file.id || '');
+        var ico = document.createElement('div');
+        ico.className = 'file-ico';
+        ico.textContent = '📄';
+        var meta = document.createElement('div');
+        meta.className = 'file-meta';
+        var fn = document.createElement('div');
+        fn.className = 'file-name';
+        fn.textContent = m.file.name || '参考材料';
+        var fs = document.createElement('div');
+        fs.className = 'file-sub';
+        fs.textContent = (m.file.kb ? m.file.kb + ' KB · ' : '') + '已作为参考材料，模型能看到全文';
+        meta.appendChild(fn);
+        meta.appendChild(fs);
+        ic.appendChild(ico);
+        ic.appendChild(meta);
+        col.appendChild(ic);
+        if (timeOn() && m.ts) {
+          var ft = document.createElement('div');
+          ft.className = 'msg-time';
+          ft.textContent = fmtClock(m.ts);
+          col.appendChild(ft);
+        }
+        inner.appendChild(col);
+        inner.appendChild(avatarEl('user'));
+        wrap.appendChild(inner);
+        return wrap;
+      }
       if (m.images && m.images.length) {
         var imgs = document.createElement('div');
         imgs.className = 'imgs';
@@ -1021,6 +1054,18 @@
       if (m.role === 'user') {
         var hasText = !!(m.content && m.content.trim());
         var tPfx = (timeOn() && m.ts) ? ('[' + fmtStamp(m.ts) + '] ') : '';
+        // 参考材料（导入的对话日志之类）：把全文递给模型，界面上只显示一张文件卡
+        if (m.kind === 'file' && m.file) {
+          var body = materialText(m.file);
+          if (body) {
+            out.push({
+              role: 'user',
+              content: '（我上传了一份参考材料，文件名：' + (m.file.name || '未命名') +
+                '。下面是它的全文，读它、记它，但不要逐字复述，也不要说“根据材料显示”这种话。）\n\n' + body
+            });
+          }
+          continue;
+        }
         // 定时任务这类系统自己塞进来的触发语：给模型看，但明确标成"不是对方说的话"
         if (hasText && m.hidden) {
           out.push({
@@ -4364,6 +4409,13 @@
       if (timeOn() && m.ts) when = ' · ' + fmtStamp(m.ts);
       if (m.role === 'user') {
         var ut = (m.content || '').trim();
+        if (m.kind === 'file' && m.file) {
+          out.push('### 我' + when + ' · 附件');
+          out.push('');
+          out.push('（参考材料：' + (m.file.name || '未命名') + '，正文见原文件）');
+          out.push('');
+          return;
+        }
         if (!ut) return;
         out.push('### 我' + when);
         out.push('');
@@ -4513,8 +4565,67 @@
     return null;
   }
 
-  function importSessions(text) {
+  /* ---------------- 参考材料：外部文件只当附件，不还原成对话 ---------------- */
+
+  var materialCache = {};
+  var MATERIAL_CAP = 60000;
+
+  /** 读一份材料的全文（超过上限就截断并注明），带一层内存缓存省钱。 */
+  function materialText(f) {
+    if (!f || !f.id) return '';
+    if (materialCache[f.id] !== undefined) return materialCache[f.id];
+    var text = '';
+    try { text = String(Native.loadImport(f.id) || ''); } catch (e) { text = ''; }
+    if (text.length > MATERIAL_CAP) {
+      text = text.slice(0, MATERIAL_CAP) + '\n\n（材料太长，后面还有 ' + (text.length - MATERIAL_CAP) + ' 个字符没有传给你。）';
+    }
+    materialCache[f.id] = text;
+    return text;
+  }
+
+  /** 这个 JSON 是不是语见自己导出的备份？只有备份才需要还原成会话。 */
+  function looksLikeOwnBackup(text) {
     var obj;
+    try { obj = JSON.parse(text); } catch (e) { return false; }
+    if (!obj || typeof obj !== 'object') return false;
+    if (obj.app === 'llm-chat') return true;
+    var arr = Array.isArray(obj.sessions) ? obj.sessions : [obj];
+    for (var i = 0; i < arr.length && i < 3; i++) {
+      var s = arr[i];
+      if (!s || !Array.isArray(s.messages)) continue;
+      var mine = (s.providerId !== undefined || s.model !== undefined || s.temperature !== undefined || s.tree !== undefined);
+      var hasText = false;
+      for (var j = 0; j < s.messages.length && j < 8; j++) {
+        var mm = s.messages[j];
+        if (mm && typeof mm.content === 'string' && mm.content.trim()) { hasText = true; break; }
+      }
+      if (mine && hasText) return true;
+    }
+    return false;
+  }
+
+  /** 把外部文件挂成一条「参考材料」，正文存原生私有目录，会话里只留卡片。 */
+  function attachMaterial(name, text) {
+    var s = state.cur;
+    if (!s) return;
+    var id = uid();
+    var ok = '0';
+    try { ok = String(Native.saveImport(id, text)); } catch (e) { ok = '0'; }
+    if (ok !== '1') { toast('材料保存失败，可能空间不够'); return; }
+    materialCache[id] = '';
+    var chars = text.length;
+    s.messages.push({
+      id: uid(), role: 'user', kind: 'file', ts: now(),
+      file: { id: id, name: name || '参考材料', chars: chars, kb: Math.max(1, Math.round(chars / 1024)) }
+    });
+    if (!s.title || s.title === '新的对话') s.title = String(name || '参考材料').slice(0, 40);
+    renderMessages();
+    persist(true);
+    renderSessions();
+    toast('已附上参考材料：' + (name || '未命名') + '（' + Math.round(chars / 1024) + ' KB）');
+  }
+
+  function importSessions(text) {    var obj;
     try { obj = JSON.parse(text); } catch (e) { toast('不是合法的 JSON 文件'); return; }
     var arr = [];
     if (Array.isArray(obj)) arr = obj;
@@ -4964,7 +5075,11 @@
     },
     onImported: function (raw) {
       var o = JSON.parse(raw);
-      importSessions(o.text);
+      var text = String(o.text || '');
+      var name = String(o.name || '导入的文件');
+      // 只有语见自己的备份才还原成会话；别人家的日志一律当参考材料挂着
+      if (looksLikeOwnBackup(text)) { importSessions(text); return; }
+      attachMaterial(name, text);
     },
 
     onSmallImage: function (raw) {
@@ -5338,6 +5453,15 @@
         if (vb) {
           e.preventDefault();
           toggleVoice(vb.getAttribute('data-vid') || '');
+          return;
+        }
+        // 参考材料卡片：点一下说清它是给模型看的
+        var fb = e.target.closest('[data-act="file"]');
+        if (fb) {
+          e.preventDefault();
+          var fmsg = findMessage(fb.closest('.msg') ? fb.closest('.msg').dataset.id : '');
+          var fn = (fmsg && fmsg.file && fmsg.file.name) || '参考材料';
+          toast('「' + fn + '」是给模型看的参考材料，全文会一起发过去');
         }
         return;
       }

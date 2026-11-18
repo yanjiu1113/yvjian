@@ -1872,3 +1872,36 @@ html, body { max-width: 100vw; overflow-x: hidden; }
 }
 .tn-ev-t { font-size: 10px; color: #8e8489; font-variant-numeric: tabular-nums; }
 .tn-ev-x { font-size: 12px; line-height: 1.6; color: #ddd3d6; word-break: break-word; }
+/* 参考材料卡片（导入的外部文件：只显示文件，不铺成对话） */
+.file-msg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 190px;
+  max-width: 74vw;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .07);
+  border: 1px solid rgba(255, 255, 255, .12);
+  cursor: pointer;
+}
+.file-msg:active { background: rgba(255, 255, 255, .12); }
+.file-ico { font-size: 22px; line-height: 1; opacity: .9; }
+.file-meta { min-width: 0; }
+.file-name {
+  font-size: 13px;
+  color: var(--text-1, #efeaea);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 52vw;
+}
+.file-sub {
+  font-size: 11px;
+  color: var(--text-3, #9a8f95);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 52vw;
+}

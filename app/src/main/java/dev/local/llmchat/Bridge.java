@@ -833,6 +833,65 @@ public class Bridge {
 
     // ---------------------------------------------------------------- files
 
+    /** 参考材料（导入的对话日志等）落在私有目录，会话里只存 id，避免会话 JSON 撑爆。 */
+    private java.io.File importDir() {
+        java.io.File d = new java.io.File(act.getFilesDir(), "materials");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+
+    private java.io.File importFile(String id) {
+        String safe = (id == null ? "" : id).replaceAll("[^A-Za-z0-9_-]", "");
+        if (safe.isEmpty()) return null;
+        return new java.io.File(importDir(), safe + ".txt");
+    }
+
+    @JavascriptInterface
+    public String saveImport(String id, String text) {
+        try {
+            java.io.File f = importFile(id);
+            if (f == null) return "0";
+            java.io.FileOutputStream out = new java.io.FileOutputStream(f);
+            try {
+                out.write((text == null ? "" : text).getBytes("UTF-8"));
+                out.flush();
+            } finally {
+                out.close();
+            }
+            return "1";
+        } catch (Throwable e) {
+            Log.e(TAG, "材料写入失败", e);
+            return "0";
+        }
+    }    @JavascriptInterface
+    public String loadImport(String id) {
+        try {
+            java.io.File f = importFile(id);
+            if (f == null || !f.exists()) return "";
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            try {
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                return new String(bo.toByteArray(), "UTF-8");
+            } finally {
+                in.close();
+            }
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    @JavascriptInterface
+    public void deleteImport(String id) {
+        try {
+            java.io.File f = importFile(id);
+            if (f != null && f.exists()) f.delete();
+        } catch (Throwable e) {
+        }
+    }
+
     @JavascriptInterface
     public void exportFile(String name, String content) {
         exportText(name, "application/json", content);
@@ -1312,10 +1371,28 @@ public class Bridge {
             }
             JSONObject p = new JSONObject();
             p.put("text", new String(bo.toByteArray(), "UTF-8"));
+            p.put("name", displayName(uri));
             emit("onImported", p);
         } catch (Exception e) {
             emitToast("导入失败: " + e.getMessage());
         }
+    }
+
+    /** 取系统文件选择器返回的真实文件名，取不到就给个占位。 */
+    private String displayName(Uri uri) {
+        String name = null;
+        try (android.database.Cursor c = act.getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) name = c.getString(idx);
+            }
+        } catch (Exception e) {
+        }
+        if (name == null || name.trim().isEmpty()) {
+            String last = uri.getLastPathSegment();
+            name = (last == null || last.isEmpty()) ? "导入的文件" : last;
+        }
+        return name;
     }
 
     private int rotationOf(Uri uri) {
