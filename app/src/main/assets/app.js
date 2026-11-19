@@ -1218,8 +1218,8 @@
       type: 'function',
       function: {
         name: 'send_sticker',
-        description: '发一张情绪表情包：从指定分类里挑图发出。情绪明显、且列表里有合适分类时才调；' +
-          '分类名原样照抄，不要编造或翻译。',
+        description: '发表情包：从指定分类里挑一张图发出去。必须和一句话一起发（先写话，再调它），' +
+          '只发图不说话不算回答；情绪明显、列表里有合适分类时才用；分类名原样照抄，不要编造或翻译。',
         parameters: {
           type: 'object',
           properties: {
@@ -1375,11 +1375,25 @@
   var DEVICE_TOOLS = { take_photo: 'photo', read_compass: 'compass', read_level: 'level' };
 
   /** 本轮要声明给模型的工具。 */
+  // 上一轮是不是「只发了表情、没说话」。是的话这一轮先不给表情工具，
+  // 否则模型会一直重复「发张图」当作回答（实测会陷进这个死循环）。
+  function stickerCooldown(s) {
+    if (!s || !s.messages) return false;
+    for (var i = s.messages.length - 1; i >= 0; i--) {
+      var m = s.messages[i];
+      if (!m) continue;
+      if (m.role === 'user') return false;
+      if (m.role !== 'assistant') continue;
+      return !!(m.stickerOnly || (m.stickerSent && !(m.content || '').trim()));
+    }
+    return false;
+  }
+
   function chatTools(s, allowSearch) {
     var list = [];
     if (s && allowSearch && toolOn(s, 'web_search')) list = list.concat(searchTools());
     if (s && (toolOn(s, 'take_photo') || toolOn(s, 'read_compass') || toolOn(s, 'read_level'))) list = list.concat(deviceTools(s));
-    if (s && s.stickerAuto && toolOn(s, 'send_sticker')) {
+    if (s && s.stickerAuto && toolOn(s, 'send_sticker') && !stickerCooldown(s)) {
       var names = stickerCategoryNames();
       if (names.length) list = list.concat(stickerTools(names));
     }
@@ -1623,6 +1637,12 @@
       system = (system ? system + '\n\n' : '') +
         '【关于历史】上文里有你导入的旧记录，那只是参考材料，里面的说话人不是你；' +
         '不要模仿其中的自我描述或能力声明，你现在具备上面列出的工具。';
+    }
+    // 上一轮只发了表情没说话：这一轮把表情工具先收起来，并明说要说话，
+    // 否则模型会把「发张图」当成万能回答。
+    if (stickerCooldown(s)) {
+      system = (system ? system + '\n\n' : '') +
+        '【提醒】上一轮你只发了一张表情，一个字都没说。这一轮先好好说话，别再用表情代替回答。';
     }
     return system;
   }
@@ -4313,7 +4333,7 @@
     if (!names.length) return '';
     return '【表情包】按情绪可发表情包：调 send_sticker（参数 category），或在最后一行写 [[emo:分类]]。\n' +
       '可选分类（只能用这些，区分大小写，写错不发）：' + names.join('、') + '\n' +
-      '情绪明显时才发，一次最多一张，别解释标记；你看不到图，按分类选就行。';
+      '表情包是配菜：说完话再发，别只发表情当回答；一次最多一张，别解释标记；你看不到图，按分类选就行。';
   }
 
   function openSessionMenu(id) {
@@ -4952,7 +4972,11 @@
         if (m.stickerRequested && !bodyText0 && !m.error) {
           var s0 = state.cur;
           if (s0 && m.stickerSent) {
-            s0.messages = s0.messages.filter(function (x) { return x.id !== m.id; });
+            // 只发了表情、没有说话：气泡不显示，但历史里留一条标记。
+            // 否则模型看不到自己发过表情，下一轮还会再发一次（会陷进「只会发表情」）。
+            m.stickerOnly = true;
+            m.hidden = true;
+            m.content = '（发了一张表情包：' + (call && call.category ? call.category : '') + '）';
             renderMessages();
             renderComposer();
             persist(true);

@@ -695,7 +695,7 @@ O.sandbox.__bridge.onDone(JSON.stringify({
   tools: [{ id: "c_o1", name: "send_sticker", args: '{"category":"吃惊"}' }]
 }));
 const oMsg = O.t.state.cur.messages.filter((m) => m.id === oId)[0];
-check("sticker-only reply removes the empty bubble", !oMsg);
+check("sticker-only bubble is hidden but kept in history", !!(oMsg && oMsg.hidden === true), "got " + JSON.stringify(oMsg && { h: oMsg.hidden, c: oMsg.content }));
 check("sticker request still fired", O.calls.stickers.indexOf("吃惊") >= 0);
 check("no error message for tool-only replies",
   !O.t.state.cur.messages.some((m) => m.error === "模型没有返回内容"));
