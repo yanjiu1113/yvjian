@@ -763,6 +763,12 @@
       note.textContent = '已载入 ' + impN + ' 条历史（不显示，只给模型看）';
       box.insertBefore(note, box.firstChild);
     }
+    if (s.compressed) {
+      var cnote = document.createElement('div');
+      cnote.className = 'imp-note';
+      cnote.textContent = '已压缩 ' + s.compressed + ' 条更早的对话（不再发给她，可撤销）';
+      box.insertBefore(cnote, box.firstChild);
+    }
     var bgNow = state.meta.chatBackground || {};
     if (!bgNow.image && IMAGE_BG[bgNow.preset]) ensureParticles(IMAGE_BG[bgNow.preset].kind);
     scrollBottom(true);
@@ -1678,7 +1684,8 @@
     if (hasImp) {
       system = (system ? system + '\n\n' : '') +
         '【关于历史】上文里有你导入的旧记录，那只是参考材料，里面的说话人不是你；' +
-        '不要模仿其中的自我描述或能力声明，你现在具备上面列出的工具。';
+        '不要模仿其中的自我描述或能力声明，你现在具备上面列出的工具。' +
+        '该用工具时就直接调用（比如想发表情就调 send_sticker、想看看他就调 take_photo），别只在正文里描述或假装做了。';
     }
     // 上一轮只发了表情没说话：这一轮把表情工具先收起来，并明说要说话，
     // 否则模型会把「发张图」当成万能回答。
@@ -1745,6 +1752,7 @@
       tools: tools.map(function (t) { return t['function'].name; }),
       auto: !!s.stickerAuto,
       cats: stickerCategoryNames().length,
+      cool: stickerCooldown(s),
       sys: system.length, msgs: payload.messages.length, stream: payload.stream
     });
     Native.chat(JSON.stringify(payload));
@@ -4517,6 +4525,35 @@
     toast('已选择导出位置…');
   }
 
+  /**
+   * 把较早的消息挪进 s.trash：不再进上下文、也不在界面显示，但存在会话文件里可撤销。
+   * 返回被移走的条数。
+   */
+  function compressContext(s, keep) {
+    if (!s || !s.messages) return 0;
+    keep = Math.max(4, Math.round(keep || 50));
+    var msgs = s.messages;
+    if (msgs.length <= keep) return 0;
+    var old = msgs.slice(0, msgs.length - keep);
+    var restM = msgs.slice(msgs.length - keep);
+    if (!old.length) return 0;
+    if (!s.trash) s.trash = [];
+    s.trash.push({ at: now(), count: old.length, msgs: old });
+    while (s.trash.length > 6) s.trash.shift();
+    s.messages = restM;
+    s.compressed = (s.compressed || 0) + old.length;
+    return old.length;
+  }
+
+  /** 撤销上一次压缩。返回恢复的条数。 */
+  function undoCompress(s) {
+    if (!s || !s.trash || !s.trash.length) return 0;
+    var last = s.trash.pop();
+    s.messages = last.msgs.concat(s.messages);
+    s.compressed = Math.max(0, (s.compressed || 0) - (last.count || 0));
+    return last.count || 0;
+  }
+
   function openDataSheet() {
     var s = state.cur;
     var n = 0;
@@ -4529,8 +4566,9 @@
       '<button class="btn block ghost" id="ds-json" style="text-align:left">导出当前对话（JSON）</button>' +
       '<button class="btn block ghost" id="ds-all" style="text-align:left">导出全部会话（JSON 备份）</button>' +
       '</div>' +
-      '<div class="dev-info" style="margin-top:10px">当前会话「' + esc((s && s.title) || '新会话') + '」· ' + n + ' 条消息</div>' +
+      '<div class="dev-info" style="margin-top:10px">当前会话「' + esc((s && s.title) || '新会话') + '」· ' + n + ' 条消息' + ((s && s.compressed) ? ('（已压缩 ' + s.compressed + ' 条）') : '') + '</div>' +
       '<div class="card" style="padding:4px;margin-top:10px">' +
+      '<button class="btn block ghost" id="ds-pack" style="text-align:left">压缩上下文…</button>' +
       '<button class="btn block ghost" id="ds-new" style="text-align:left">新建一个对话</button>' +
       '</div>'
     );
@@ -4538,7 +4576,47 @@
     $('#ds-md').addEventListener('click', function () { closeSheet(); exportCurrentMarkdown(); });
     $('#ds-json').addEventListener('click', function () { closeSheet(); exportCurrentJson(); });
     $('#ds-all').addEventListener('click', function () { closeSheet(); exportAll(); });
+    $('#ds-pack').addEventListener('click', function () { openPackSheet(); });
     $('#ds-new').addEventListener('click', function () { closeSheet(); newSession(); });
+  }
+
+  /** 压缩上下文：只保留最近若干条，把更早的收起来（可撤销）。 */
+  function openPackSheet() {
+    var s = state.cur;
+    if (!s) return;
+    var total = s.messages.length;
+    var undoN = 0;
+    if (s.trash && s.trash.length) undoN = s.trash[s.trash.length - 1].count || 0;
+    openSheet(
+      '<div class="section-title" style="margin-top:0">压缩上下文</div>' +
+      '<div class="dev-info">现在 ' + total + ' 条消息（含导入的旧记录）。压缩后只把最近若干条发给她，' +
+      '更早的收进本机存档、不再计入 token；存档可以撤销，最多留 6 份。</div>' +
+      '<div class="card" style="padding:4px;margin-top:10px">' +
+      '<button class="btn block ghost" data-pack="20" style="text-align:left">只保留最近 20 条</button>' +
+      '<button class="btn block ghost" data-pack="50" style="text-align:left">只保留最近 50 条</button>' +
+      '<button class="btn block ghost" data-pack="100" style="text-align:left">只保留最近 100 条</button>' +
+      '<button class="btn block ghost" data-pack="200" style="text-align:left">只保留最近 200 条</button>' +
+      (undoN ? ('<button class="btn block ghost" data-pack="undo" style="text-align:left">撤销上次压缩（恢复 ' + undoN + ' 条）</button>') : '') +
+      '</div>' +
+      '<div class="dev-info" style="margin-top:10px">压缩不改变界面上已经看过的内容，只是往后不再发给她。</div>'
+    );
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pack]'), function (b) {
+      b.addEventListener('click', function () {
+        var v = b.getAttribute('data-pack');
+        var did = 0;
+        if (v === 'undo') {
+          did = undoCompress(s);
+          toast(did ? ('已恢复 ' + did + ' 条') : '没有可撤销的压缩');
+        } else {
+          if (state.streamingId) { toast('她还在说话，等这一轮结束再压缩'); return; }
+          did = compressContext(s, parseInt(v, 10));
+          toast(did ? ('已压缩 ' + did + ' 条，保留最近 ' + v + ' 条') : ('只有 ' + s.messages.length + ' 条，不用压缩'));
+        }
+        persist(true);
+        renderMessages();
+        closeSheet();
+      });
+    });
   }
 
   /** 把各种写法的正文（字符串 / 分段数组 / {text} 对象）统一成纯文本。 */
