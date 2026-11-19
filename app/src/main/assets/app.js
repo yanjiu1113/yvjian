@@ -1049,30 +1049,9 @@
       }
       return o;
     }
-    // 导入进来的历史只是「背景材料」：全塞进去会把她带偏（一千多条别人的对话，
-    // 她就会顺着别人的说话方式走，连工具都不调），也白烧 token。只取最近的 60 条。
-    var IMP_KEEP = 60;
-    var skipImp = {};
-    (function () {
-      var seen = 0;
-      for (var q = s.messages.length - 1; q >= 0; q--) {
-        var qm = s.messages[q];
-        if (!qm.imp) continue;
-        seen++;
-        if (seen > IMP_KEEP) skipImp[qm.id] = 1;
-      }
-    })();
-    var impOpen = false;
     for (var i = 0; i < s.messages.length; i++) {
       var m = s.messages[i];
       if (m.id === excludeId) break;
-      if (m.imp && skipImp[m.id]) continue;
-      // 旧记录看完了，插一句「到此为止」：不然后面全是别人的对话，她会接着别人的语气演下去。
-      if (!m.imp && impOpen) {
-        impOpen = false;
-        out.push(asst({ reasoning: '' }, '（上面的旧记录我看完了。现在开始是我们自己的对话。）'));
-      }
-      if (m.imp) impOpen = true;
       if (m.role === 'user') {
         var hasText = !!(m.content && m.content.trim());
         var tPfx = (timeOn() && m.ts) ? ('[' + fmtStamp(m.ts) + '] ') : '';
