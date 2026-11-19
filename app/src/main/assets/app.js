@@ -2071,8 +2071,18 @@
     if (!s || !call) return false;
     var node = addMemory(s, call);
     if (!node) {
-      // 重复内容，没写；如果这轮只有工具调用没有正文，就别留一个空气泡
-      if (!(assistantMsg.content || '').trim()) assistantMsg.hidden = true;
+      // 没写进去（大概率是同一条刚记过）。别让她以为写成功了：回一条工具结果说明白。
+      dbg('remember-skip', (call.emotion || '') + '/' + (call.branch || ''));
+      if (!(assistantMsg.content || '').trim()) {
+        s.messages.push({
+          id: uid(), role: 'tool', device: 'tree', pending: false, ts: now(),
+          content: '（这件事十分钟内已经记过了，没有重复写。要记新的就换个说法或换个主题标签。）'
+        });
+        renderMessages();
+        persist(true);
+        continueAfterSearch();
+        return true;
+      }
       return false;
     }
     persist(true);
@@ -2642,12 +2652,12 @@
       t.nodes.push(root);
       if (!sum) return root;
     }
-    // 去重：最近 8 个节点里已经有完全一样的（情绪 + 概括 + 标签），就不再写一遍
+    // 去重：最近 8 个节点里已经有完全一样的（情绪 + 概括 + 标签），且是十分钟内写的，就不再写一遍
     var win = Math.min(8, t.nodes.length);
     for (var di = t.nodes.length - 1; di >= t.nodes.length - win && di >= 0; di--) {
       var dn = t.nodes[di];
       var dsum = (dn.events && dn.events.length) ? dn.events[dn.events.length - 1].text : '';
-      if (dn.emotion === emo && (dn.branch || '') === br && dsum === sum) return null;
+      if (dn.emotion === emo && (dn.branch || '') === br && dsum === sum && (ts - (dn.ts || 0)) < 600000) return null;
     }
     // 父节点：显式 parentId > 同 branch 标签最近的节点 > 树根（新分支从根分出来）> 最新一步。
     var parent = treeById(s, p.parentId) || null;
