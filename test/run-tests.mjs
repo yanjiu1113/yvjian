@@ -211,6 +211,7 @@ check("payload carries model", payload.model === "vendor/model-a");
 check("payload has no system when empty", !("system" in payload) || payload.system === "");
 check("first message is the user turn", payload.messages[0].role === "user" && payload.messages[0].content === "帮我写个快排");
 check("temperature forwarded", payload.temperature === 0.7, "got " + payload.temperature);
+check("reasoning effort defaults to high", payload.reasoningEffort === "high", "got " + payload.reasoningEffort);
 check("assistant placeholder is not sent", payload.messages.every((m) => m.role !== "assistant"));
 check("session message added", t.state.cur.messages.length === 2 && t.state.cur.messages[0].role === "user");
 check("auto title from first message", t.state.cur.title === "帮我写个快排", "title=" + t.state.cur.title);

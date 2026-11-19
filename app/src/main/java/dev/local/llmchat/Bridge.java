@@ -411,6 +411,11 @@ public class Bridge {
             if (maxTok > 0) body.put("max_tokens", maxTok);
             double topP = p.optDouble("topP", -1);
             if (topP >= 0 && topP <= 1) body.put("top_p", topP);
+            // 推理强度：DeepSeek / OpenAI 兼容端点用 reasoning_effort（low|medium|high）
+            String effort = p.optString("reasoningEffort", "");
+            if ("low".equals(effort) || "medium".equals(effort) || "high".equals(effort)) {
+                body.put("reasoning_effort", effort);
+            }
 
             JSONObject streamOpts = p.optJSONObject("streamOptions");
             if (streamOpts != null && body.optBoolean("stream", false)) {

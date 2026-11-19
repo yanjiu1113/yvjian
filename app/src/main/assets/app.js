@@ -269,6 +269,7 @@
       temperature: 0.7,
       maxTokens: 0,
       topP: -1,
+      reasoningEffort: 'high',
       contextLimit: 0,
       stream: true,
       webSearch: false,
@@ -324,6 +325,7 @@
     if (s.maxTokens == null) s.maxTokens = 0;
 
     if (s.topP == null) s.topP = -1;
+    if (s.reasoningEffort !== 'low' && s.reasoningEffort !== 'medium' && s.reasoningEffort !== 'high') s.reasoningEffort = 'high';
 
     if (s.contextLimit == null) s.contextLimit = 0;
 
@@ -1293,6 +1295,11 @@
     return t[key] !== false;
   }
 
+  // ---------------------------------------------------------------- 推理强度
+  // low / medium / high 三段，滑块 0/1/2；官方 App 默认 high
+  function effIdx(v) { return v === 'low' ? 0 : (v === 'medium' ? 1 : 2); }
+  function effName(v) { return v === 'low' ? '低' : (v === 'medium' ? '中' : '高'); }
+
   // ---------------------------------------------------------------- 时间戳
   function timeOn() { return !!(state.meta && state.meta.timestamps); }
   function p2(n) { return (n < 10 ? '0' : '') + n; }
@@ -1662,6 +1669,7 @@
       temperature: typeof s.temperature === 'number' ? s.temperature : 0.7,
       maxTokens: s.maxTokens || 0,
       topP: typeof s.topP === 'number' ? s.topP : -1,
+      reasoningEffort: s.reasoningEffort || 'high',
       stream: s.stream !== false
     };
     if (payload.stream) payload.streamOptions = { include_usage: true };
@@ -1938,6 +1946,7 @@
       temperature: typeof s.temperature === 'number' ? s.temperature : 0.7,
       maxTokens: s.maxTokens || 0,
       topP: typeof s.topP === 'number' ? s.topP : -1,
+      reasoningEffort: s.reasoningEffort || 'high',
       stream: s.stream !== false
     };
     if (payload.stream) payload.streamOptions = { include_usage: true };
@@ -3537,6 +3546,7 @@
       '<div class="slider-row"><label>上下文长度</label><input type="range" id="ms-ctx" min="0" max="60" step="2" value="' + Math.min(60, ctx) + '"><div class="val" id="ms-ctx-v">' + (ctx ? ctx + ' 条' : '全部') + '</div></div>' +
       '<div class="slider-row"><label>最大 tokens</label><input type="range" id="ms-max" min="0" max="16384" step="256" value="' + (s.maxTokens || 0) + '"><div class="val" id="ms-max-v">' + (s.maxTokens ? s.maxTokens : '默认') + '</div></div>' +
       '<div class="slider-row"><label>top_p</label><input type="range" id="ms-top" min="-1" max="1" step="0.05" value="' + s.topP + '"><div class="val" id="ms-top-v">' + (s.topP < 0 ? '默认' : Number(s.topP).toFixed(2)) + '</div></div>' +
+      '<div class="slider-row"><label>推理强度</label><input type="range" id="ms-effort" min="0" max="2" step="1" value="' + effIdx(s.reasoningEffort) + '"><div class="val" id="ms-effort-v">' + effName(s.reasoningEffort) + '</div></div>' +
 
       '<div class="section-title">开关</div>' +
       '<div class="switch-row"><div><div class="s-label">流式输出</div>' +
@@ -3642,6 +3652,12 @@
     $('#ms-top').addEventListener('input', function (e) {
       s.topP = Number(e.target.value);
       $('#ms-top-v').textContent = s.topP < 0 ? '默认' : s.topP.toFixed(2);
+      persist();
+    });
+    $('#ms-effort').addEventListener('input', function (e) {
+      var v = Number(e.target.value);
+      s.reasoningEffort = v <= 0 ? 'low' : (v >= 2 ? 'high' : 'medium');
+      $('#ms-effort-v').textContent = effName(s.reasoningEffort);
       persist();
     });
 
@@ -5525,6 +5541,7 @@
         if (parsed.maxTokens == null) parsed.maxTokens = 0;
 
         if (parsed.topP == null) parsed.topP = -1;
+        if (parsed.reasoningEffort !== 'low' && parsed.reasoningEffort !== 'medium' && parsed.reasoningEffort !== 'high') parsed.reasoningEffort = 'high';
 
         if (parsed.contextLimit == null) parsed.contextLimit = 0;
 
