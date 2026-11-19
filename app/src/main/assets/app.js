@@ -1022,7 +1022,10 @@
     }
     function asst(m, text) {
       var o = { role: 'assistant', content: text };
-      if (m && m.reasoning && wantReason) o.reasoning_content = String(m.reasoning);
+      // 只有「这一轮调过工具」的回复才必须回传 reasoning_content（DeepSeek 思考模式的硬要求）。
+      // 普通回复也回传的话，等于把整段思考再算一次输入，所以不再无脑带。
+      var need = m && m.reasoning && wantReason && m.toolCalls && m.toolCalls.length;
+      if (need) o.reasoning_content = String(m.reasoning);
       return o;
     }
     for (var i = 0; i < s.messages.length; i++) {
@@ -1128,34 +1131,24 @@
       p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
-  function buildSearchToolPrompt(allowTools) {
-    var base = '当前时间：' + nowText() + '。';
-    if (!allowTools) return base;
-    return '【联网搜索 · 强制规则】\n' +
-      '你具备联网能力：有 web_search 工具，也可以用 <<search:关键词>> 文本指令触发搜索。\n' +
-      '凡涉及下列任一情况，必须先搜索、拿到结果再回答，禁止凭记忆作答，也禁止说"我无法联网/我的知识有截止时间"：\n' +
-      '- 遇到你不认识的词、术语、人名、地名、作品名、缩写、代号（先查清是什么再回答）\n' +
-      '- 新闻、时事、近期事件、最新进展、突发消息\n' +
-      '- 价格、汇率、股价、天气、比分、库存、版本号\n' +
-      '- 具体人物/公司/产品的近况、最新动态\n' +
-      '- 任何你不确定、可能已过时、或需要引证的事实\n' +
-      '调用方式（任选其一）：\n' +
-      'A. 直接调用 web_search 工具，参数 {"query":"关键词"}；\n' +
-      'B. 在回复中单独一行写 <<search:关键词>>。\n' +
-      '客户端会立刻执行搜索，并把【搜索结果】作为下一条消息发给你，你再据此作答。\n' +
-      '示例：\n' +
-      '用户：北京今天有什么新闻？\n' +
-      '你：我先查一下最新报道。\n' +
-      '<<search:北京 新闻>>\n' +
-      '规则：\n' +
-      '1) 查询词是关键词、不超过 12 个词，保留专有名词，带上时间限定（今天/最新）；\n' +
-      '2) 一次只调一次，已搜过的不要重复；最多 ' + MAX_SEARCH_PER_TURN + ' 次；\n' +
-      '3) 结果到达后直接基于结果回答，用到的事实在句末标注来源链接；\n' +
-      '4) 闲聊、写作、翻译、代码、数学、纯常识不需要搜索；\n' +
-      '5) 标记不要写进代码块，也不要解释或复述这个标记本身。\n' +
-      '再次强调：新闻/实时类问题，不搜索就回答视为错误。\n\n' + base;
+  function todayText() {
+    var d = new Date();
+    function q(n) { return (n < 10 ? '0' : '') + n; }
+    var wk = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
+    return d.getFullYear() + '-' + q(d.getMonth() + 1) + '-' + q(d.getDate()) + '（' + wk + '）';
   }
 
+  function buildSearchToolPrompt(allowTools) {
+    // 只给「今天几号、周几」：精确到分钟的写法会让前缀缓存每 60 秒整段失效，
+    // 一天变一次则可以接受；每条消息的具体时间由「时间戳」开关加在正文前缀里。
+    var today = '今天是 ' + todayText() + '。';
+    if (!allowTools) return today;
+    return '【联网】你有 web_search 工具，也可以在正文单独一行写 <<search:关键词>>，客户端会替你搜并把结果回给你。\n' +
+      '新闻、时事、价格、汇率、天气、比分、版本号、人物近况、陌生名词、任何可能过时的事实：先搜再答，' +
+      '不要说"我无法联网"也不要凭记忆编。闲聊、写作、翻译、代码、数学、常识不用搜。\n' +
+      '查询不超过 12 个词、带上时间限定，一次一条，最多 ' + MAX_SEARCH_PER_TURN + ' 次；' +
+      '结果到了就基于它回答并在句末标来源链接，无关就忽略。标记别写进代码块、别解释。\n' + today;
+  }
   function isOpenRouter(s) {
     var p = s && s.providerId ? provider(s.providerId) : null;
     var url = (p && p.baseUrl ? p.baseUrl : '').toLowerCase();
@@ -1166,14 +1159,13 @@
       type: 'function',
       function: {
         name: 'web_search',
-        description: '搜索互联网获取实时信息：新闻、天气、价格、赛事比分、近期事件、具体事实、陌生名词。返回若干条结果的标题、链接和摘要。',
+        description: '搜索互联网：新闻、天气、价格、比分、近期事件、具体事实。返回标题、链接、摘要。',
         parameters: {
           type: 'object',
           properties: {
             query: {
               type: 'string',
-              description: '搜索引擎关键词，不超过 12 个词；问"今天/最新"时把时间词写进去；' +
-                '问新闻时写成「主体 + 新闻」（客户端会自动走新闻源）'
+              description: '关键词，不超过 12 个词；问「今天/最新」要带时间词；问新闻写成「主体 + 新闻」'
             }
           },
           required: ['query']
@@ -1223,22 +1215,18 @@
       type: 'function',
       function: {
         name: 'send_sticker',
-        description: '发一张情绪表情包。客户端会从指定分类里随机挑一张图发出去。' +
-          '只有在对话情绪明显、且分类列表里有合适选项时才调用；' +
-          '没有合适的分类就不要调用这个工具，直接正常回复文字。' +
-          '分类名必须原样来自列表，不要自己编造、不要翻译、不要加引号。',
+        description: '发一张情绪表情包：从指定分类里挑图发出。情绪明显、且列表里有合适分类时才调；' +
+          '分类名原样照抄，不要编造或翻译。',
         parameters: {
           type: 'object',
           properties: {
             category: {
               type: 'string',
-              description: '情绪分类名，只能从以下列表里选一个（原样输出，不要加引号或解释）：' +
-                names.join('、')
+              description: '分类名，只能从下列选一个（原样）：' + names.join('、')
             },
             pick: {
               type: 'integer',
-              description: '可选。上一轮系统把该分类的候选图发给你之后，用 0 开始的编号指定你到底要发哪一张。' +
-                '没有收到候选图时不要填。'
+              description: '可选：收到候选图后用 0 起的编号指定要发哪张；没收到候选图就别填。'
             }
           },
           required: ['category']
@@ -1253,20 +1241,17 @@
       type: 'function',
       function: {
         name: 'schedule_task',
-        description: '设一个定时任务：到时间后你会收到一条提醒性消息，然后由你主动开口。' +
-          '适合「十分钟后提醒我喝水」「半小时后问他到家没有」「明早跟我说早安」这类。' +
-          '要不要用、隔多久、到点说什么，都由你决定；不需要定时的闲聊就别调。' +
-          '注意任务只在应用还开着的时候有效（关掉应用可能会丢）。',
+        description: '设定时任务：到点你收到提醒并主动开口。要不要用、隔多久、说什么都由你定；应用关掉可能丢。',
         parameters: {
           type: 'object',
           properties: {
             delay_seconds: {
               type: 'integer',
-              description: '多少秒之后触发，最小 30，最长 86400（一天）'
+              description: '多少秒后触发，30–86400'
             },
             prompt: {
               type: 'string',
-              description: '到点后你自己要做什么，用第一人称写给自己看，例如「提醒他喝水，语气温柔一点」'
+              description: '到点你自己要做什么，第一人称写给自己看'
             },
             label: {
               type: 'string',
@@ -1285,19 +1270,14 @@
       type: 'function',
       function: {
         name: 'send_voice',
-        description: '发一条语音消息（会真的响，对方点开能听见你的声音）。' +
-          '什么时候用由你判断：想说一句短的、撒娇、懒得打字、' +
-          '或者语音比文字更有感觉的时候。' +
-          '文字要口语化、短（一两句、不超过 60 字），不要带表情符号和 markdown；' +
-          '想说长内容就正常打字，别用语音念一大段。' +
-          '注意：想发语音就调用本工具；不要在正文里写「（语音）」或「[语音]」这样的标记假装发了语音，' +
-          '那样对方只会看到两个字，听不到任何声音。',
+        description: '发一条语音（真的会响）。短句、撒娇、懒得打字时用；要口语化、60 字以内、不带表情和 markdown。' +
+          '想发语音就调本工具，不要在正文写「（语音）」假装发了。',
         parameters: {
           type: 'object',
           properties: {
             text: {
               type: 'string',
-              description: '你要说的话，口语化，一两句，别超过 60 字'
+              description: '要说的话，口语化，一两句，60 字以内'
             }
           },
           required: ['text']
@@ -1349,19 +1329,15 @@
         type: 'function',
         function: {
           name: 'take_photo',
-          description: '调用手机摄像头拍一张照片，拍完你能直接看到画面。' +
-            '什么时候用由你判断：想知道对方现在的样子、周围环境、手上的东西、纸上的字，' +
-            '或者对话情境里"看一眼"本身就成立的时候，都可以主动调用。' +
-            '重要：调用前必须先在正文里问一句（例如「我想看看你，可以吗」「拍一张给我看好不好」），' +
-            '等对方明确同意后再调用；没问就问会直接被拒绝。' +
-            '注意它会真的打开相机、占用对方几秒，没必要时别连着用。',
+          description: '拍一张照片，拍完你能看到画面。想看他、环境、纸面时可以调。' +
+            '调用前必须先在正文问一句「我想看看你，可以吗」，等他同意再调，否则会被拒绝。会真开相机，别连用。',
           parameters: {
             type: 'object',
             properties: {
               facing: {
                 type: 'string',
                 enum: ['back', 'front'],
-                description: 'back = 后置（拍眼前的东西、环境、纸面）；front = 前置（自拍、拍对方的脸）。默认 back。'
+                description: 'back=后置（环境、纸面），front=前置（自拍）。默认 back。'
               }
             },
             required: []
@@ -1372,8 +1348,7 @@
         type: 'function',
         function: {
           name: 'read_compass',
-          description: '读取手机朝向（指南针）：方位角 0-360 度、十六方位中文名、俯仰与横滚。' +
-            '方向本身有意义时（想知道对方朝哪、在路上、面朝什么）就调用，不必等对方明确要求。',
+          description: '读手机朝向：方位角、八方位名、俯仰横滚。方向有意义时调。',
           parameters: { type: 'object', properties: {}, required: [] }
         }
       },
@@ -1381,8 +1356,7 @@
         type: 'function',
         function: {
           name: 'read_level',
-          description: '读取手机倾角（水平仪）：俯仰、横滚、最大倾斜角，以及是否接近水平。' +
-            '判断"放平了没有 / 有多斜"这类事情时调用。',
+          description: '读手机倾角：俯仰、横滚、最大倾斜、是否水平。',
           parameters: { type: 'object', properties: {}, required: [] }
         }
       }
@@ -1546,14 +1520,10 @@
   }
 
   var DEVICE_RULE =
-    '【你手上的手机能力】你可以直接调用 take_photo / read_compass / read_level 三个工具，' +
-    '它们会真的打开这台手机的相机、读它的方向和倾角，结果（照片/度数）会作为工具结果回给你，' +
-    '之后你就能看到画面、知道朝向。『看看这里』『我朝哪边』『放平了没有』这类请求直接调用即可，' +
-    '不要回答"我看不到""我没有摄像头"——那是旧印象，现在你能。\n' +
-    '拍照前先在正文里问一句并等对方同意（例：「我想看看你，可以吗」），没问就调会被客户端拦下。' +
-    '指南针与水平仪不涉及隐私，随时可读。\n' +
-    '如果你的接口不支持函数调用、或者调不动工具，就改在正文里写标记，客户端会替你执行并回结果：' +
-    '<<camera>> 或 <<camera front>>（前置）、<<compass>>、<<level>>。标记会从正文里被去掉，对方看不到。';
+    '【手机能力】take_photo / read_compass / read_level 会真的开相机、读方向和倾角，结果会回给你。' +
+    '别回答"我看不到""我没有摄像头"——现在你能。\n' +
+    '拍照前必须先在正文问一句并等对方同意；指南针与水平仪随时可读。\n' +
+    '接口不支持函数调用时，改在正文写 <<camera>> / <<camera front>> / <<compass>> / <<level>>，客户端会执行，标记对对方不可见。';
 
   var PET_RULE =
     '【隐藏信号】每条回复的最后一行，输出一个不可见的情绪标记（主人看不到，不要解释）：\n' +
@@ -1602,10 +1572,6 @@
       var memo = state.meta && state.meta.petMemo;
       if (memo) system = (system ? system + '\n\n' : '') +
         '【上一轮实际执行】' + memo + '（你可以据此调整下一轮的 n，但不要提及这条信息）';
-    }
-    if (timeOn()) {
-      system = (system ? system + '\n\n' : '') +
-        '【时间】现在是 ' + nowText() + '。消息开头的 [MM-DD HH:MM] 是本地时间，可以据此判断隔了多久、是白天还是深夜。';
     }
     return system;
   }
@@ -1995,15 +1961,13 @@
       type: 'function',
       function: {
         name: 'recall',
-        description: '翻开你自己的「情感记忆树」，看看以前记下过什么。这棵树只有你能读、也只有你能写。' +
-          '当对方提到过去的事、你觉得该想起点什么、或者想确认某件事在你心里的分量时，就调用它。' +
-          '读不读完全由你决定——没人会替你翻。' +
-          '返回的是你自己当初写下的情绪和概括，不是原话。',
+        description: '翻开你的「情感记忆树」，看以前记下过什么。这棵树只有你能读写；' +
+          '对方提到过去、或你想确认某件事的分量时调。读不读由你决定。返回的是你写下的情绪与概括。',
         parameters: {
           type: 'object',
           properties: {
-            branch: { type: 'string', description: '可选，只翻某一条枝（主题标签），不填就翻最近的几条' },
-            limit: { type: 'integer', description: '翻几条，默认 8，最多 40' }
+            branch: { type: 'string', description: '可选，只翻某条枝（主题标签）' },
+            limit: { type: 'integer', description: '几条，默认 8，最多 40' }
           },
           required: []
         }
@@ -2636,20 +2600,16 @@
       type: 'function',
       function: {
         name: 'remember',
-        description: '把这一刻写进「情感记忆树」。这棵树完全由你维护，对方只能看、不能写。' +
-          '值得记住的情绪或事件出现时就调用它。emotion 是 2-6 个字的情绪词；weight 是这件事在你心里的分量 1-100；' +
-          'summary 是**你自己概括**的事件（一两句、40 字以内，不要抄原话）。' +
-          '树为空时第一次调用会自动长出根节点（只有情感和时间，没有事件）。' +
-          '想分叉就用 branch：给它贴一个简短的主题标签（例如 家庭 / 工作 / 那段回忆），同标签会长在同一条枝上；换一个标签就从树根上另分出一条枝。' +
-          '不填 branch 就默认接在最新一步上面。' +
-          '同一轮里不要连续调用超过两次。',
+        description: '把这一刻写进「情感记忆树」（只有你能写）。值得记住的情绪或事件出现时调。' +
+          'summary 用你自己的话概括，40 字以内，不要抄原话；branch 是主题标签，同标签长同一条枝，换标签从根另起一枝。' +
+          '树为空时第一次会自己长根节点。同一轮最多调两次。',
         parameters: {
           type: 'object',
           properties: {
-            emotion: { type: 'string', description: '2-6 个字的情绪词，例如 心动 / 委屈 / 安心 / 心疼 / 戒备' },
-            weight: { type: 'integer', description: '分量 1-100，越大越接近主干' },
+            emotion: { type: 'string', description: '2-6 字情绪词，如 心动 / 委屈 / 安心' },
+            weight: { type: 'integer', description: '分量 1-100' },
             summary: { type: 'string', description: '你自己概括的事件，一两句、40 字以内' },
-            branch: { type: 'string', description: '可选，简短主题标签；换一个标签就从树根上另起一条枝' }
+            branch: { type: 'string', description: '可选，主题标签；换标签就从根另起一枝' }
           },
           required: ['emotion']
         }
@@ -4280,16 +4240,9 @@
       }
     }
     if (!names.length) return '';
-    return '【表情包】你可以根据对话情绪发一张表情包，两种方式任选其一：\n' +
-      'A. 直接调用 send_sticker 工具，参数 {"category":"分类"}；\n' +
-      'B. 在回复最末尾另起一行写标记 [[emo:分类]]。\n' +
-      '可选分类（只能用这些，写错不会发出）：' + names.join('、') + '\n' +
-      '规则：\n' +
-      '1) 只有情绪明显（开心、难过、无语、傲娇、惊讶…）时才发，不要每句都发；\n' +
-      '2) 分类必须严格使用上面列表里的名字，区分大小写；\n' +
-      '3) 一次回复最多一个标记，放在最后一行；\n' +
-      '4) 标记本身不会展示给用户，不要解释它，也不要在正文里提到它；\n' +
-      '5) 你不需要看到图片内容——按情绪选分类即可，客户端会随机挑一张该分类的图发出去。';
+    return '【表情包】按情绪可发表情包：调 send_sticker（参数 category），或在最后一行写 [[emo:分类]]。\n' +
+      '可选分类（只能用这些，区分大小写，写错不发）：' + names.join('、') + '\n' +
+      '情绪明显时才发，一次最多一张，别解释标记；你看不到图，按分类选就行。';
   }
 
   function openSessionMenu(id) {

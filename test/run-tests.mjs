@@ -324,7 +324,9 @@ D.t.sendCore("驻京观是什么", []);
 check("no search before the model replies", D.calls.search.length === 0);
 check("first chat call happens immediately", D.calls.chat.length === 1);
 check("tool prompt injected into system", D.calls.chat[0].system.indexOf("<<search:") >= 0);
-check("system carries the current time", D.calls.chat[0].system.indexOf("当前时间") >= 0);
+// 时间只保留「今天几号」：精确到分钟的写法会让前缀缓存每 60 秒整段失效
+check("system no longer carries the clock", D.calls.chat[0].system.indexOf("当前时间") < 0);
+check("system carries the day", D.calls.chat[0].system.indexOf("今天是") >= 0);
 
 const m1 = D.calls.chat[0].msgId;
 D.sandbox.__bridge.onChunk(JSON.stringify({ id: m1, c: "我查一下。\n<<search:驻京观>>\n", r: "" }));
