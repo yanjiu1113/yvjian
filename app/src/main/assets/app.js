@@ -1573,6 +1573,37 @@
       if (memo) system = (system ? system + '\n\n' : '') +
         '【上一轮实际执行】' + memo + '（你可以据此调整下一轮的 n，但不要提及这条信息）';
     }
+    // 一句话点明「现在真的有哪些工具」：工具虽声明在 tools 里，但长历史里容易被忽略，
+    // 模型会顺着旧对话回答「我没有这个能力」。
+    var avail = [];
+    if (toolOn(s, 'take_photo')) avail.push('拍照 take_photo');
+    if (toolOn(s, 'read_compass')) avail.push('指南针 read_compass');
+    if (toolOn(s, 'read_level')) avail.push('水平仪 read_level');
+    if (s.stickerAuto && toolOn(s, 'send_sticker')) avail.push('表情包 send_sticker');
+    if (toolOn(s, 'send_voice')) avail.push('语音 send_voice');
+    if (toolOn(s, 'schedule_task')) avail.push('定时任务 schedule_task');
+    if (toolOn(s, 'remember')) avail.push('记进记忆树 remember');
+    if (toolOn(s, 'recall')) avail.push('翻记忆树 recall');
+    // 导入的历史是别的会话的记录，里面的「助手」不是你；不提醒的话模型会照着它说「我没有摄像头」
+    var hasImp = false;
+    for (var q = 0; q < s.messages.length; q++) {
+      if (s.messages[q] && s.messages[q].imp) { hasImp = true; break; }
+    }
+    // 用户是否在「工具」页里手动动过开关（动过才注入说明，保持"系统提示词留空=不带 system"的约定）
+    var explicitAny = false;
+    if (s.toolOn) {
+      for (var k in s.toolOn) { if (s.toolOn[k] === true) { explicitAny = true; break; } }
+    }
+    if (avail.length && (explicitAny || hasImp)) {
+      system = (system ? system + '\n\n' : '') +
+        '【你现在能用的工具】' + avail.join('、') +
+        '。需要时直接调用，不要说"我没有这个能力/我做不到"。';
+    }
+    if (hasImp) {
+      system = (system ? system + '\n\n' : '') +
+        '【关于历史】上文里有你导入的旧记录，那只是参考材料，里面的说话人不是你；' +
+        '不要模仿其中的自我描述或能力声明，你现在具备上面列出的工具。';
+    }
     return system;
   }
 
