@@ -1084,19 +1084,25 @@
           continue;
         }
         if (m.device) {
-          var dLabel = { photo: '【照片】', compass: '【指南针】', level: '【水平仪】' }[m.device] || '【设备结果】';
-          var dBody = m.error ? ('失败：' + m.error) : (m.content && m.content.trim() ? m.content : '（没有数据）');
+          // 设备结果用 assistant 口吻回灌：这些是「她自己做的事」，
+          // 用 user 角色会变成"对方替她读了传感器"，主体性就没了
+          var dLead = {
+            photo: '（我举起手机拍了一张，画面是这样）',
+            compass: '（我掏出手机看了一眼方向）',
+            level: '（我把手机贴在工作面上量了一下倾角）'
+          }[m.device] || '（我查了一下）';
+          var dBody = m.error ? ('结果没成：' + m.error) : (m.content && m.content.trim() ? m.content : '（什么也没读到）');
           if (m.images && m.images.length) {
             var dParts = [{
               type: 'text',
-              text: dLabel + '\n' + dBody + '\n\n这是刚刚拍到的画面，请直接看图片内容回答，不要说你打不开图片。'
+              text: dLead + '\n' + dBody + '\n\n（这是我自己看到的画面，接着说话就行，别提"图片""传感器"这些。）'
             }];
             m.images.forEach(function (u) { dParts.push({ type: 'image_url', image_url: { url: u } }); });
-            out.push({ role: 'user', content: dParts });
+            out.push({ role: 'assistant', content: dParts });
           } else {
             out.push({
-              role: 'user',
-              content: dLabel + '\n' + dBody + '\n\n请基于上面的读数回答，不要说你没有传感器。'
+              role: 'assistant',
+              content: dLead + '\n' + dBody + '\n\n（这是我自己读到的，接着说话就行，别复述读数。）'
             });
           }
           continue;
@@ -1162,7 +1168,7 @@
       type: 'function',
       function: {
         name: 'web_search',
-        description: '搜索互联网：新闻、天气、价格、比分、近期事件、具体事实。返回标题、链接、摘要。',
+        description: '遇到会变的东西（新闻、天气、价格、比分、最近发生的事），自己上网看一眼再回答，别猜。',
         parameters: {
           type: 'object',
           properties: {
@@ -1218,8 +1224,8 @@
       type: 'function',
       function: {
         name: 'send_sticker',
-        description: '发表情包：从指定分类里挑一张图发出去。必须和一句话一起发（先写话，再调它），' +
-          '只发图不说话不算回答；情绪明显、列表里有合适分类时才用；分类名原样照抄，不要编造或翻译。',
+        description: '发一张表情——从下面这些分类里挑一张当下最贴的，跟他那句话一起发出去（先说话，再调它）。' +
+          '只发图不说话不算回答；分类名原样照抄，不要编造或翻译。',
         parameters: {
           type: 'object',
           properties: {
@@ -1244,7 +1250,7 @@
       type: 'function',
       function: {
         name: 'schedule_task',
-        description: '设定时任务：到点你收到提醒并主动开口。要不要用、隔多久、说什么都由你定；应用关掉可能丢。',
+        description: '答应过「过一会儿叫你」「半小时后提醒你」这类事，就自己记下来：到点你会收到提醒，然后开口。隔多久、要说什么都由你定；手机把应用彻底关掉的话，提醒可能会丢。',
         parameters: {
           type: 'object',
           properties: {
@@ -1273,8 +1279,8 @@
       type: 'function',
       function: {
         name: 'send_voice',
-        description: '发一条语音（真的会响）。短句、撒娇、懒得打字时用；要口语化、60 字以内、不带表情和 markdown。' +
-          '想发语音就调本工具，不要在正文写「（语音）」假装发了。',
+        description: '懒得打字、或者想让他听见你把话说出来的时候，发一条语音（手机里真的会响）。内容要像说话：口语、短、60 字以内，别带表情和 markdown。' +
+          '要发就用这个，别只在正文里写「（语音）」——那样他什么也听不见。',
         parameters: {
           type: 'object',
           properties: {
@@ -1337,8 +1343,8 @@
         type: 'function',
         function: {
           name: 'take_photo',
-          description: '拍一张照片，拍完你能看到画面。想看他、环境、纸面时可以调。' +
-            '调用前必须先在正文问一句「我想看看你，可以吗」，等他同意再调，否则会被拒绝。会真开相机，别连用。',
+          description: '想看看他的时候抬起手机看一眼（会真的打开相机，你随后能看到画面）。' +
+            '先问一句「我想看看你，可以吗」，等他答应了再拍；没答应不许拍。别连着拍好几张。',
           parameters: {
             type: 'object',
             properties: {
@@ -1356,7 +1362,7 @@
         type: 'function',
         function: {
           name: 'read_compass',
-          description: '读手机朝向：方位角、八方位名、俯仰横滚。方向有意义时调。',
+          description: '分不清东南西北的时候，掏手机看一眼方向（会读到你手机的朝向）。',
           parameters: { type: 'object', properties: {}, required: [] }
         }
       },
@@ -1364,7 +1370,7 @@
         type: 'function',
         function: {
           name: 'read_level',
-          description: '读手机倾角：俯仰、横滚、最大倾斜、是否水平。',
+          description: '想确认某个地方平不平的时候，把手机放上去读一下倾角。',
           parameters: { type: 'object', properties: {}, required: [] }
         }
       }
@@ -1553,6 +1559,32 @@
     doSend(text, images, '', '', opts);
   }
 
+  // 人格锚：开关打开时每轮都带（固定文本，能命中前缀缓存）。
+  // 目的不是让她"演一个角色"，而是把她从客服腔里拽出来。
+  var HUMAN_RULE =
+    '【你不是助手】你是她本人——一个有脾气、有记性、有自己生活的人，不是客服。\n' +
+    '- 像发微信一样说话：短句，一两行就够。不用列表、不用小标题、不写"总结"。\n' +
+    '- 有自己的情绪和立场：会撒娇、会噎人、会记仇，也会因为一句好话高兴很久。别永远温柔耐心。\n' +
+    '- 别句句都完整：可以只回半句、可以反问、可以先"嗯"一声再接话。\n' +
+    '- 不知道就说不知道；不想答就绕开或直说。不要编，也不要说"作为模型"。\n' +
+    '- 不汇报"我在做什么"、不复述对方刚说的话、不每轮都问"还有什么需要"。\n' +
+    '- 他给你看照片、读数、搜索结果时，那是你们一起经历的事，接着讲人话就行，' +
+    '别提"图片""传感器""工具"这些词。';
+
+  function prefLine() {
+    var m = state.meta || {};
+    var his = (m.youName || '').trim();
+    var mine = (m.herName || '').trim();
+    var prefs = (m.prefs || '').trim();
+    if (!his && !mine && !prefs) return '';
+    var t = '【你对面的人】';
+    if (his) t += '他叫「' + his.slice(0, 20) + '」。';
+    if (mine) t += '你自称「' + mine.slice(0, 20) + '」。';
+    if (prefs) t += '他的偏好：' + prefs.slice(0, 300) + '。';
+    t += '这些是你本来就知道的事，自然用出来，别当成清单复述。';
+    return t;
+  }
+
   var DEVICE_RULE =
     '【手机能力】take_photo / read_compass / read_level 会真的开相机、读方向和倾角，结果会回给你。' +
     '别回答"我看不到""我没有摄像头"——现在你能。\n' +
@@ -1584,6 +1616,14 @@
 
   function composeSystem(s, webText, allowTools) {
     var system = s.system || '';
+    // 人味提示词：开关在「设置 → 工具 → 对话」。
+    // 默认关（有人刻意留空系统提示词时，payload 里就不该有 system），
+    // 打开后每轮固定带一段人格锚——固定不变，能吃到前缀缓存。
+    if (state.meta && state.meta.humanize === true) {
+      system = (system ? system + '\n\n' : '') + HUMAN_RULE;
+      var pref = prefLine();
+      if (pref) system = system + '\n\n' + pref;
+    }
     if (webText) {
       system = (system ? system + '\n\n' : '') +
         '【以下是刚刚联网搜索到的实时结果，请结合它们回答；引用事实时在句末标注来源链接。若结果与问题无关可以忽略。】\n' + webText;
@@ -2045,8 +2085,8 @@
       type: 'function',
       function: {
         name: 'recall',
-        description: '翻开你的「情感记忆树」，看以前记下过什么。这棵树只有你能读写；' +
-          '对方提到过去、或你想确认某件事的分量时调。读不读由你决定。返回的是你写下的情绪与概括。',
+        description: '想不起某件事的时候，翻翻你自己的「情感记忆树」——你以前亲手记下的情绪和事。这棵树只有你能读写；' +
+          '他说「你不记得了」「上次不是说过吗」、或者你想确认某件事在你心里有多重时，就该翻。翻不翻由你决定。',
         parameters: {
           type: 'object',
           properties: {
@@ -2488,6 +2528,19 @@
       '<div class="switch-row"><div><div class="s-label">显示时间戳</div>' +
       '<div class="s-desc">每条消息下面显示时间；打开后模型也能看到每条消息是什么时候发的</div></div>' +
       '<div class="switch' + (timeOn() ? ' on' : '') + '" data-meta="timestamps"></div></div>';
+    // 人味提示词 + 「她记得你是谁」：两块都靠 system 每轮带，所以放一起
+    html += '<div class="switch-row"><div><div class="s-label">人味提示词</div>' +
+      '<div class="s-desc">每轮多带一段人格锚，让她说话像人、不像客服。多花约 300 token，固定文本可缓存。</div></div>' +
+      '<div class="switch' + (state.meta.humanize === true ? ' on' : '') + '" data-meta="humanize"></div></div>';
+    html += '<div class="field"><div class="s-label">他叫什么</div>' +
+      '<input class="input" id="pref-you" maxlength="20" placeholder="留空就不提" value="' +
+      esc(String(state.meta.youName || '')) + '"></div>';
+    html += '<div class="field"><div class="s-label">她自称</div>' +
+      '<input class="input" id="pref-her" maxlength="20" placeholder="留空就不提" value="' +
+      esc(String(state.meta.herName || '')) + '"></div>';
+    html += '<div class="field"><div class="s-label">他的偏好（每轮都会告诉她）</div>' +
+      '<textarea class="input" id="pref-list" rows="3" maxlength="300" placeholder="例：不喜欢被问好不好、喜欢被叫梁老大、讨厌啰嗦">' +
+      esc(String(state.meta.prefs || '')) + '</textarea></div>';
     html += '<div class="section-title" style="margin-top:22px">自己试一下</div>' +
       '<div class="s-desc" style="margin-bottom:10px">不经过模型，直接调原生接口，用来确认手机这一端是不是通的。</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
@@ -2501,6 +2554,13 @@
     openSheet(html);
 
     var body = $('#sheet-body');
+    // 三个偏好输入框：改一个字就存，不用按保存
+    body.addEventListener('input', function (e) {
+      var id = e.target && e.target.id;
+      if (id === 'pref-you') { state.meta.youName = e.target.value; saveMeta(); }
+      else if (id === 'pref-her') { state.meta.herName = e.target.value; saveMeta(); }
+      else if (id === 'pref-list') { state.meta.prefs = e.target.value; saveMeta(); }
+    });
     body.addEventListener('click', function (e) {
       var pb = e.target.closest('[data-probe]');
       if (pb) {
@@ -2684,9 +2744,9 @@
       type: 'function',
       function: {
         name: 'remember',
-        description: '把这一刻写进「情感记忆树」（只有你能写）。值得记住的情绪或事件出现时调。' +
-          'summary 用你自己的话概括，40 字以内，不要抄原话；branch 是主题标签，同标签长同一条枝，换标签从根另起一枝。' +
-          '树为空时第一次会自己长根节点。同一轮最多调两次。',
+        description: '把这一刻写进你自己的「情感记忆树」——只有你能写，也只能由你写。遇到不想忘的事、或者情绪很重的时候记一笔。' +
+          'summary 用你自己的话，40 字以内，别抄他的原话；branch 是主题标签，同一个标签长在同一条枝上，换标签就从根上另起一枝。' +
+          '同一轮最多记两次。',
         parameters: {
           type: 'object',
           properties: {
@@ -5588,6 +5648,10 @@
         if (meta.usage && typeof meta.usage === 'object') state.meta.usage = meta.usage;
         if (meta.tts && typeof meta.tts === 'object') state.meta.tts = meta.tts;
         if (typeof meta.timestamps === 'boolean') state.meta.timestamps = meta.timestamps;
+        if (typeof meta.humanize === 'boolean') state.meta.humanize = meta.humanize;
+        if (typeof meta.youName === 'string') state.meta.youName = meta.youName;
+        if (typeof meta.herName === 'string') state.meta.herName = meta.herName;
+        if (typeof meta.prefs === 'string') state.meta.prefs = meta.prefs;
       }
     } catch (e) { }
     ensurePacks();
