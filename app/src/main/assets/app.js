@@ -1957,6 +1957,43 @@
    */
   var VOICE_MARK_RE = /^[\s\u3000]*[（(【\[]\s*(?:语音|语音消息|语音条|voice|audio)\s*[）)】\]]\s*[:：]?\s*([\s\S]+)$/i;
 
+  /**
+   * 兜底：模型没调 remember，改在正文里写 <<remember emotion=心疼 weight=88 summary=…>>。
+   * 它真心话常这么写（思考过程里已经出现过好几次），所以直接认。
+   */
+  var REMEMBER_TAG_RE = /<<\s*remember\b([\s\S]{0,400}?)>>/i;
+
+  function parseRememberTag(text) {
+    var mt = REMEMBER_TAG_RE.exec(String(text || ''));
+    if (!mt) return null;
+    var body = String(mt[1] || '');
+    function grab(key) {
+      var re = new RegExp('(?:^|\\s)' + key + '\\s*[=:：]\\s*([\\s\\S]*?)(?=\\s+[a-zA-Z_]+\\s*[=:：]|$)', 'i');
+      var m2 = re.exec(body);
+      return m2 ? String(m2[1]).trim() : '';
+    }
+    var emo = grab('emotion') || grab('emo') || grab('mood');
+    var sum = grab('summary') || grab('event') || grab('text') || grab('note');
+    var br = grab('branch') || grab('topic');
+    var wRaw = grab('weight') || grab('value');
+    if (!emo && !sum) return null;
+    var w = parseInt(wRaw, 10);
+    return {
+      kind: 'tree',
+      id: '',
+      emotion: emo.slice(0, 12),
+      summary: sum.replace(/\s+/g, ' ').slice(0, 240),
+      parentId: grab('parent'),
+      branch: br.slice(0, 12),
+      weight: (w > 0 ? Math.min(100, w) : 50)
+    };
+  }
+
+  function stripRememberTags(text) {
+    return String(text || '').replace(new RegExp(REMEMBER_TAG_RE.source, 'gi'), '')
+      .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  }
+
   function parseVoiceMarker(text) {
     var mt = VOICE_MARK_RE.exec(String(text || ''));
     if (!mt) return null;
@@ -2766,7 +2803,10 @@
         name: 'remember',
         description: '把这一刻写进你自己的「情感记忆树」——只有你能写，也只能由你写。遇到不想忘的事、或者情绪很重的时候记一笔。' +
           'summary 用你自己的话，40 字以内，别抄他的原话；branch 是主题标签，同一个标签长在同一条枝上，换标签就从根上另起一枝。' +
-          '同一轮最多记两次。',
+          '同一轮最多记两次。' +
+          '注意：必须真的调用这个工具（或者照下面这条格式写在正文里，客户端会替你写进去）：' +
+          '<<remember emotion=心疼 weight=88 branch=围栏 summary=他每次按下去之前都要犹豫很久>>。' +
+          '只在心里想着"我记住了"、正文里说一句"我记下了"——树里不会多任何东西。',
         parameters: {
           type: 'object',
           properties: {
@@ -5066,6 +5106,14 @@
             renderMessages();
             dbg('voice-marker', vMark.text.slice(0, 24));
             if (runVoiceStep(m, { kind: 'voice', text: vMark.text, id: '' })) return;
+          }
+          // 兜底：模型没调 remember，改在正文里写了 <<remember ...>>（它很爱这么干）
+          var rMark = parseRememberTag(m.content || '');
+          if (rMark && state.cur && toolOn(state.cur, 'remember')) {
+            m.content = stripRememberTags(m.content || '');
+            renderMessages();
+            dbg('remember-tag', (rMark.emotion || '') + '/' + (rMark.branch || ''));
+            if (runTreeStep(m, rMark)) return;
           }
         }
         if (!m.error && o.tools && o.tools.length) {
