@@ -242,10 +242,27 @@ check("error surfaced on message", em.error === "HTTP 401: invalid api key");
 check("error clears streaming", em.streaming === false);
 check("failed turn excluded from history", t.buildHistory(t.state.cur, null).every((m) => !(m.role === "assistant" && m.content === "")));
 
+// reasoning_content 自动重试不能变成死循环（3.67 曾因此把余额烧掉）
+t.state.cur.messages = [];
+const beforeBounce = A.calls.chat.length;
+t.sendCore("循环测试", []);
+let bounceMsg = A.calls.chat[A.calls.chat.length - 1];
+for (let i = 0; i < 6; i++) {
+  A.sandbox.__bridge.onError(JSON.stringify({
+    id: bounceMsg.msgId,
+    msg: "HTTP 400: The `reasoning_content` in the thinking mode must be passed back to the API. (request_id: x)"
+  }));
+  const next = A.calls.chat[A.calls.chat.length - 1];
+  if (next === bounceMsg) break;   // 没有发出新请求，说明刹车生效
+  bounceMsg = next;
+}
+const bounceAdded = A.calls.chat.length - beforeBounce;
+check("reasoning bounce is capped", bounceAdded >= 1 && bounceAdded <= 3, "calls=" + bounceAdded);
+
 // image turn becomes content parts
 t.state.cur.messages = [];
 t.sendCore("看这张图", ["data:image/jpeg;base64,AAAA"]);
-const p3 = A.calls.chat[2];
+const p3 = A.calls.chat[A.calls.chat.length - 1];
 check("image turn uses content parts", Array.isArray(p3.messages[0].content) && p3.messages[0].content[0].type === "text");
 check("image url embedded", p3.messages[0].content[1].image_url.url.startsWith("data:image/jpeg;base64,"));
 
