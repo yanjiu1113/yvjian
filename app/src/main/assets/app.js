@@ -290,9 +290,19 @@
     var json = JSON.stringify(s, function (k, v) { return k === 'streaming' ? undefined : v; });
     clearTimeout(persist.timer);
     if (immediate) {
-      Native.saveSession(json);
+      try {
+        Native.saveSession(json);
+      } catch (e) {
+        dbg('save-fail', '会话保存失败：' + (e && e.message ? e.message : String(e)) + '，约 ' + Math.round(json.length / 1024) + ' KB');
+      }
     } else {
-      persist.timer = setTimeout(function () { Native.saveSession(json); }, 450);
+      persist.timer = setTimeout(function () {
+        try {
+          Native.saveSession(json);
+        } catch (e) {
+          dbg('save-fail', '会话保存失败：' + (e && e.message ? e.message : String(e)) + '，约 ' + Math.round(json.length / 1024) + ' KB');
+        }
+      }, 450);
     }
     var meta = null;
     for (var i = 0; i < state.sessions.length; i++) if (state.sessions[i].id === s.id) meta = state.sessions[i];
@@ -332,6 +342,7 @@
     if (s.stream == null) s.stream = true;
 
     if (!s.tree || !Array.isArray(s.tree.nodes)) s.tree = { nodes: [] };
+    loadTreeFallback(s);
     if (s.webSearch == null) s.webSearch = false;
     if (s.stickerAuto == null) s.stickerAuto = false;
     if (!s.toolOn) s.toolOn = {};
@@ -2123,6 +2134,7 @@
       return false;
     }
     persist(true);
+    saveTreeNow(s);
     if (state.open.side) renderTree();
     dbg('remember', node.emotion + '/' + node.weight);
     if ((assistantMsg.content || '').trim()) return false;
@@ -2666,6 +2678,30 @@
     if (!s) return { nodes: [] };
     if (!s.tree || !Array.isArray(s.tree.nodes)) s.tree = { nodes: [] };
     return s.tree;
+  }
+
+  // 记忆树单独存一份：超大会话的完整 JSON 可能保存失败，树只有几百字节，不跟它一起丢。
+  function saveTreeNow(s) {
+    if (!s || !Native.saveTree) return;
+    try {
+      Native.saveTree(s.id, JSON.stringify(ensureTree(s)));
+    } catch (e) {
+      dbg('tree-save-fail', (e && e.message) || String(e));
+    }
+  }
+
+  function loadTreeFallback(s) {
+    var t = ensureTree(s);
+    if (t.nodes.length || !s.id || !Native.loadTree) return;
+    try {
+      var raw = Native.loadTree(s.id);
+      if (raw) {
+        var o = JSON.parse(raw);
+        if (o && Array.isArray(o.nodes) && o.nodes.length) { s.tree = o; dbg('tree-restored', o.nodes.length); }
+      }
+    } catch (e) {
+      dbg('tree-load-fail', (e && e.message) || String(e));
+    }
   }
 
   function treeById(s, id) {

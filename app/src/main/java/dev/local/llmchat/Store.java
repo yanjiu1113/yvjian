@@ -150,6 +150,26 @@ public class Store {
         file(id).delete();
     }
 
+    private File treeFile(String id) {
+        File d = new File(ctx.getFilesDir(), "trees");
+        if (!d.exists()) d.mkdirs();
+        return new File(d, id + ".json");
+    }
+
+    public void saveTree(String id, String json) throws Exception {
+        write(treeFile(id), json);
+    }
+
+    public String loadTree(String id) {
+        File f = treeFile(id);
+        if (!f.exists()) return "";
+        try {
+            return read(f);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     private static String read(File f) throws Exception {
         try (FileInputStream in = new FileInputStream(f)) {
             ByteArrayOutputStream bo = new ByteArrayOutputStream();

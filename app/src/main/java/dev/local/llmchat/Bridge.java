@@ -836,6 +836,22 @@ public class Bridge {
         store.delete(id);
     }
 
+    // 记忆树单独持久化：超大会话的 JSON 可能几 MB、saveSession 偶尔会失败/被丢，
+    // 树只有几百字节，单独存一份，写入失败也不至于整棵树一起丢。
+    @JavascriptInterface
+    public void saveTree(String id, String json) {
+        try {
+            store.saveTree(id, json);
+        } catch (Exception e) {
+            Log.e(TAG, "saveTree", e);
+        }
+    }
+
+    @JavascriptInterface
+    public String loadTree(String id) {
+        return store.loadTree(id);
+    }
+
     // ---------------------------------------------------------------- files
 
     /** 参考材料（导入的对话日志等）落在私有目录，会话里只存 id，避免会话 JSON 撑爆。 */
