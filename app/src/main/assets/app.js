@@ -325,7 +325,7 @@
     if (s.maxTokens == null) s.maxTokens = 0;
 
     if (s.topP == null) s.topP = -1;
-    if (s.reasoningEffort !== 'low' && s.reasoningEffort !== 'medium' && s.reasoningEffort !== 'high') s.reasoningEffort = 'high';
+    if (s.reasoningEffort === 'medium') s.reasoningEffort = 'high'; if (s.reasoningEffort !== 'low' && s.reasoningEffort !== 'high' && s.reasoningEffort !== 'max') s.reasoningEffort = 'high';
 
     if (s.contextLimit == null) s.contextLimit = 0;
 
@@ -1024,9 +1024,10 @@
     }
     function asst(m, text) {
       var o = { role: 'assistant', content: text };
-      // 只有「这一轮调过工具」的回复才必须回传 reasoning_content（DeepSeek 思考模式的硬要求）。
-      // 普通回复也回传的话，等于把整段思考再算一次输入，所以不再无脑带。
-      var need = m && m.reasoning && wantReason && m.toolCalls && m.toolCalls.length;
+      // 官方文档：**请求里带 tools 时，历史每轮的 reasoning_content 都必须原样回传**
+      // （即使那一轮没真的调工具），否则 400。不带 tools 的请求则会被忽略。
+      // 所以这里按「这一轮有没有带 tools」决定，而不是按「有没有调工具」。
+      var need = m && m.reasoning && wantReason;
       if (need) o.reasoning_content = String(m.reasoning);
       return o;
     }
@@ -1297,8 +1298,8 @@
 
   // ---------------------------------------------------------------- 推理强度
   // low / medium / high 三段，滑块 0/1/2；官方 App 默认 high
-  function effIdx(v) { return v === 'low' ? 0 : (v === 'medium' ? 1 : 2); }
-  function effName(v) { return v === 'low' ? '低' : (v === 'medium' ? '中' : '高'); }
+  function effIdx(v) { return v === 'low' ? 0 : (v === 'max' ? 2 : 1); }
+  function effName(v) { return v === 'low' ? '低' : (v === 'max' ? '最高' : '高'); }
 
   // ---------------------------------------------------------------- 时间戳
   function timeOn() { return !!(state.meta && state.meta.timestamps); }
@@ -3656,7 +3657,7 @@
     });
     $('#ms-effort').addEventListener('input', function (e) {
       var v = Number(e.target.value);
-      s.reasoningEffort = v <= 0 ? 'low' : (v >= 2 ? 'high' : 'medium');
+      s.reasoningEffort = v <= 0 ? 'low' : (v >= 2 ? 'max' : 'high');
       $('#ms-effort-v').textContent = effName(s.reasoningEffort);
       persist();
     });
@@ -4644,35 +4645,79 @@
    * 把外部文件里的内容并进「当前会话」。
    * 不新建会话、不铺成气泡：这些消息只进上下文，模型接着往下演，用户看的是自己的对话。
    */
+  // 官方会话日志（DSH session.v4.jsonl）：一行一条记录，靠 type 区分。
+  //   {"type":"user/message","time":…,"data":{"content":[{"type":"text","text":"…"}]}}
+  //   {"type":"assistant/message","time":…,"data":{"message":{"content":[{"type":"reasoning",…},{"type":"text",…}]}}}
+  // 只取 type=text 的片段：reasoning 是思考过程，不属于对话正文。
+  function partsText(parts) {
+    if (!Array.isArray(parts)) return '';
+    var buf = [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (!p || typeof p !== 'object') continue;
+      if (p.type && p.type !== 'text') continue;
+      if (typeof p.text === 'string' && p.text) buf.push(p.text);
+    }
+    return buf.join('\n').trim();
+  }
+
+  function parseOfficialLog(text) {
+    var out = [];
+    var lines = String(text || '').split(/\r?\n/);
+    var isIso = function (v) { return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v); };
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i].trim();
+      if (!ln || ln.charAt(0) !== '{') continue;
+      var rec;
+      try { rec = JSON.parse(ln); } catch (e) { continue; }
+      if (!rec || typeof rec !== 'object') continue;
+      var t = String(rec.type || '');
+      var d = rec.data || {};
+      var role = '', body = '';
+      if (t === 'user/message') { role = 'user'; body = partsText(d.content); }
+      else if (t === 'assistant/message') { role = 'assistant'; body = partsText(d.message && d.message.content); }
+      else continue;
+      if (!body || isIso(body)) continue;
+      out.push({ role: role, content: body, ts: typeof rec.time === 'number' ? rec.time : 0, imp: true });
+    }
+    return out;
+  }
+
   function mergeIntoCurrent(text) {
-    var obj;
-    try { obj = JSON.parse(text); } catch (e) { toast('不是合法的 JSON 文件'); return; }
     var s = state.cur;
     if (!s) return;
 
-    var src = pickMsgArray(obj);
-    if (!src) {
-      var arr = Array.isArray(obj) ? obj
-        : (obj && (obj.sessions || obj.conversations || obj.data)) || null;
-      if (Array.isArray(arr)) {
-        arr.forEach(function (it) {
-          var c = pickMsgArray(it);
-          if (c && (!src || c.length > src.length)) src = c;
-        });
-      }
-    }
-    if (!src || !src.length) { toast('文件里没找到消息'); return; }
+    // 先按官方日志格式解析（JSONL，一行一条记录）
+    var got = parseOfficialLog(text);
+    var how = '官方日志';
 
-    var got = [];
-    src.forEach(function (raw, i) {
-      var mm = coerceMsg(raw, i);
-      if (!mm) return;
-      if (!(mm.content || '').trim() && !(mm.images && mm.images.length)) return;
-      got.push(mm);
-    });
+    if (!got.length) {
+      // 不是官方格式，再退回通用 JSON 解析
+      var obj;
+      try { obj = JSON.parse(text); } catch (e) { toast('不是合法的 JSON 文件'); return; }
+      var src = pickMsgArray(obj);
+      if (!src) {
+        var arr = Array.isArray(obj) ? obj
+          : (obj && (obj.sessions || obj.conversations || obj.data)) || null;
+        if (Array.isArray(arr)) {
+          arr.forEach(function (it) {
+            var c = pickMsgArray(it);
+            if (c && (!src || c.length > src.length)) src = c;
+          });
+        }
+      }
+      if (!src || !src.length) { toast('文件里没找到消息'); return; }
+      src.forEach(function (raw, i) {
+        var mm = coerceMsg(raw, i);
+        if (!mm) return;
+        if (!(mm.content || '').trim() && !(mm.images && mm.images.length)) return;
+        got.push(mm);
+      });
+      how = '通用 JSON';
+    }
     if (!got.length) {
       toast('这份文件里没有能用的正文（可能全是思考过程或时间戳）');
-      dbg('import-merge-empty', 'src=' + src.length);
+      dbg('import-merge-empty', 'lines');
       return;
     }
 
@@ -4680,7 +4725,7 @@
     persist(true);
     renderMessages();
     toast('已并入当前对话：' + got.length + ' 条（不显示，只给模型看）');
-    dbg('import-merge', got.length + '条 | ' + String((obj && (obj.title || obj.name)) || ''));
+    dbg('import-merge', how + ' · ' + got.length + '条');
   }
 
   // ---------------------------------------------------------------- native callbacks
@@ -5541,7 +5586,7 @@
         if (parsed.maxTokens == null) parsed.maxTokens = 0;
 
         if (parsed.topP == null) parsed.topP = -1;
-        if (parsed.reasoningEffort !== 'low' && parsed.reasoningEffort !== 'medium' && parsed.reasoningEffort !== 'high') parsed.reasoningEffort = 'high';
+        if (parsed.reasoningEffort === 'medium') parsed.reasoningEffort = 'high'; if (parsed.reasoningEffort !== 'low' && parsed.reasoningEffort !== 'high' && parsed.reasoningEffort !== 'max') parsed.reasoningEffort = 'high';
 
         if (parsed.contextLimit == null) parsed.contextLimit = 0;
 
