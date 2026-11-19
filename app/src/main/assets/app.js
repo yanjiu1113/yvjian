@@ -1030,11 +1030,12 @@
     }
     function asst(m, text) {
       var o = { role: 'assistant', content: text };
-      // 官方文档：**请求里带 tools 时，历史每轮的 reasoning_content 都必须原样回传**
-      // （即使那一轮没真的调工具），否则 400。不带 tools 的请求则会被忽略。
-      // 所以这里按「这一轮有没有带 tools」决定，而不是按「有没有调工具」。
-      var need = m && m.reasoning && wantReason;
-      if (need) o.reasoning_content = String(m.reasoning);
+      // 官方文档：**请求里带 tools 时，历史每轮的 reasoning_content 都必须原样回传**，
+      // 否则 400。而且这一条对「我们自己塞进去的动作记录」同样成立——它们没有真实思考，
+      // 就补一句占位，缺这一个字段会让整轮请求返回空白（stage 0..3 全是 content=0）。
+      if (wantReason) {
+        o.reasoning_content = (m && m.reasoning) ? String(m.reasoning) : '（这一步没有额外思考，直接做了。）';
+      }
       return o;
     }
     for (var i = 0; i < s.messages.length; i++) {
@@ -1074,19 +1075,18 @@
         if (m.device === 'memory') {
           // 记忆树是她自己写的，所以要用 assistant 角色回灌：
           // 用 user 角色的话，她会以为这些是对方告诉她的
-          out.push({
-            role: 'assistant',
-            content: '（我翻开自己的记忆树，看了看以前自己写下的东西）\n' + (m.content || '（里面什么都没有）') +
-              '\n\n（这些是我自己记下的，不是对方说的。要提就自然地带出来，不要逐条复述，也不要说“根据我的记忆”这种话。）'
-          });
+          var memBody = '（我翻开自己的记忆树，看了看以前自己写下的东西）\n' + (m.content || '（里面什么都没有）') +
+            '\n\n（这些是我自己记下的，不是对方说的。要提就自然地带出来，不要逐条复述，也不要说“根据我的记忆”这种话。）';
+          var memObj = { role: 'assistant', content: memBody };
+          if (wantReason) memObj.reasoning_content = '（我自己去翻了记忆树。）';
+          out.push(memObj);
           continue;
         }
         if (m.device === 'tree') {
           // 写入成功回执同样是她自己做的动作
-          out.push({
-            role: 'assistant',
-            content: '（我把这件事记进了自己的记忆树：' + (m.content || '已记下') + '）'
-          });
+          var treeObj = { role: 'assistant', content: '（我把这件事记进了自己的记忆树：' + (m.content || '已记下') + '）' };
+          if (wantReason) treeObj.reasoning_content = '（我把这一刻记下来了。）';
+          out.push(treeObj);
           continue;
         }
         if (m.device) {
