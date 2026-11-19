@@ -2137,14 +2137,16 @@
     saveTreeNow(s);
     if (state.open.side) renderTree();
     dbg('remember', node.emotion + '/' + node.weight);
-    if ((assistantMsg.content || '').trim()) return false;
+    // 不管这一轮有没有说话，都要留一条回执：模型收不到回执会以为写失败，
+    // 于是反复重写（曾经因此一次长出四个一样的节点）。
     s.messages.push({
       id: uid(), role: 'tool', device: 'tree', pending: false, ts: now(),
       content: '已写进情感记忆树：' + node.emotion + '（分量 ' + node.weight + '）' +
-        (node.events.length ? '；事件：' + node.events[0].text : '')
+        (node.events && node.events.length ? '；事件：' + node.events[node.events.length - 1].text : '')
     });
     renderMessages();
     persist(true);
+    if ((assistantMsg.content || '').trim()) return false;   // 正文说过了，就别再让模型多跑一轮
     continueAfterSearch();
     return true;
   }
@@ -2725,12 +2727,21 @@
       t.nodes.push(root);
       if (!sum) return root;
     }
-    // 去重：最近 8 个节点里已经有完全一样的（情绪 + 概括 + 标签），且是十分钟内写的，就不再写一遍
+    // 去重：同一情绪 + 同一标签 + 十分钟内，算同一次情绪，不再新长一个节点，
+    // 只把新的事件并进那个节点（模型没收到回执时会连写好几次，不能一次长四个）。
     var win = Math.min(8, t.nodes.length);
     for (var di = t.nodes.length - 1; di >= t.nodes.length - win && di >= 0; di--) {
       var dn = t.nodes[di];
+      if (dn.emotion !== emo || (dn.branch || '') !== br) continue;
+      if ((ts - (dn.ts || 0)) >= 600000) continue;
       var dsum = (dn.events && dn.events.length) ? dn.events[dn.events.length - 1].text : '';
-      if (dn.emotion === emo && (dn.branch || '') === br && dsum === sum && (ts - (dn.ts || 0)) < 600000) return null;
+      if (dsum === sum) return null;                       // 一字不差：完全重复，什么都不做
+      if (sum) {
+        if (!dn.events) dn.events = [];
+        dn.events.push({ ts: ts, text: sum, weight: w });
+      }
+      dn.ts = ts;
+      return dn;                                           // 并进已有节点
     }
     // 父节点：显式 parentId > 同 branch 标签最近的节点 > 树根（新分支从根分出来）> 最新一步。
     var parent = treeById(s, p.parentId) || null;
@@ -2776,6 +2787,27 @@
     return { pos: pos, cols: Math.max(1, cursor), depth: maxDepth };
   }
 
+  function treeZoom() {
+    var z = Number(state.treeZoom) || 1;
+    return Math.max(0.4, Math.min(3, z));
+  }
+
+  function pinchDist(t) {
+    var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy) || 1;
+  }
+
+  function applyTreeZoom(z) {
+    var wrap = document.querySelector('.tree-zoom');
+    var cvs = document.querySelector('.tree-canvas');
+    if (!wrap || !cvs) return;
+    var w = parseFloat(cvs.getAttribute('data-w')) || cvs.offsetWidth;
+    var h = parseFloat(cvs.getAttribute('data-h')) || cvs.offsetHeight;
+    cvs.style.transform = 'scale(' + z + ')';
+    wrap.style.width = Math.round(w * z) + 'px';
+    wrap.style.height = Math.round(h * z) + 'px';
+  }
+
   function renderTree() {
     var body = $('#side-panel-body');
     if (!body) return;
@@ -2810,7 +2842,9 @@
       svg += '<path d="M' + x1 + ',' + y1 + ' C' + x1 + ',' + my + ' ' + x2 + ',' + my + ' ' + x2 + ',' + y2 + '" fill="none" stroke="rgba(255,155,147,.42)" stroke-width="1.6"/>';
     });
     svg += '</svg>';
-    var html = '<div class="tree-canvas" style="width:' + cw + 'px;height:' + ch + 'px">' + svg;
+    var z = treeZoom();
+    var html = '<div class="tree-zoom" style="width:' + Math.round(cw * z) + 'px;height:' + Math.round(ch * z) + 'px">' +
+      '<div class="tree-canvas" data-w="' + cw + '" data-h="' + ch + '" style="width:' + cw + 'px;height:' + ch + 'px;transform:scale(' + z + ')">' + svg;
     t.nodes.forEach(function (n) {
       var p = xy[n.id];
       if (!p) return;
@@ -2828,7 +2862,7 @@
           : '<div class="tn-ev"><div class="tn-ev-x">这一步只留下情绪，没有具体事件。</div></div>') + '</div>' : '') +
         '</div>';
     });
-    html += '</div>';
+    html += '</div></div>';
     body.innerHTML = html;
   }
 
@@ -2902,6 +2936,23 @@
       treeOpen[id] = !treeOpen[id];
       renderTree();
     });
+
+    // 双指捏合缩放这棵树（只缩放，不改数据）
+    if (treeBody && !treeBody.__zoomBound) {
+      treeBody.__zoomBound = true;
+      var pDist = 0, pBase = 1;
+      treeBody.addEventListener('touchstart', function (e) {
+        if (e.touches.length === 2) { pDist = pinchDist(e.touches); pBase = treeZoom(); }
+      }, { passive: true });
+      treeBody.addEventListener('touchmove', function (e) {
+        if (e.touches.length !== 2 || !pDist) return;
+        var z = Math.max(0.4, Math.min(3, pBase * (pinchDist(e.touches) / pDist)));
+        state.treeZoom = z;
+        applyTreeZoom(z);
+        if (e.cancelable) e.preventDefault();
+      }, { passive: false });
+      treeBody.addEventListener('touchend', function () { pDist = 0; }, { passive: true });
+    }
 
     var sx = 0, sy = 0, tracking = false, fromEdge = false;
     document.addEventListener('touchstart', function (e) {

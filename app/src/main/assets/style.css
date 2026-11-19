@@ -1822,6 +1822,9 @@ html, body { max-width: 100vw; overflow-x: hidden; }
   font-size: 13px;
   line-height: 1.9;
 }
+.tree-zoom { position: relative; margin: 4px auto; }
+.tree-canvas { transform-origin: 0 0; }
+
 .tree-canvas { position: relative; margin: 4px auto; }
 .tree-links { position: absolute; left: 0; top: 0; pointer-events: none; }
 .tree-node {
