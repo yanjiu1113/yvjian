@@ -1093,12 +1093,14 @@
           }[m.device] || '（我查了一下）';
           var dBody = m.error ? ('结果没成：' + m.error) : (m.content && m.content.trim() ? m.content : '（什么也没读到）');
           if (m.images && m.images.length) {
+            // 官方 API 不允许 assistant 消息带图（会 400: Image in assistant message is not supported），
+            // 所以带画面的一条只能留在 user 角色；文字照旧用第一人称，别让她觉得是"别人给她的图"。
             var dParts = [{
               type: 'text',
-              text: dLead + '\n' + dBody + '\n\n（这是我自己看到的画面，接着说话就行，别提"图片""传感器"这些。）'
+              text: dLead + '\n' + dBody + '\n\n（这是刚刚拍到的画面，直接看内容接着说话；别说"打不开图片"。）'
             }];
             m.images.forEach(function (u) { dParts.push({ type: 'image_url', image_url: { url: u } }); });
-            out.push({ role: 'assistant', content: dParts });
+            out.push({ role: 'user', content: dParts });
           } else {
             out.push({
               role: 'assistant',
