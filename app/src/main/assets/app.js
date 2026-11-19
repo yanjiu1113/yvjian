@@ -1511,6 +1511,18 @@
     var hasText = !!(text && text.trim());
     if (!hasText && (!images || !images.length)) return;
 
+    // 防跑飞：只有「自动重发」才限流（手动发消息不该被拦），
+    // 自动重试循环曾经把余额烧到 17 块。
+    var nowMs = Date.now();
+    if (opts && opts.auto && state.lastSendAt && nowMs - state.lastSendAt < 900) {
+      dbg('send-throttled', { gap: nowMs - state.lastSendAt, text: String(text || '').slice(0, 20) });
+      toast('自动重试太频繁，已拦下一次');
+      return;
+    }
+    state.lastSendAt = nowMs;
+    state.bounceCount = 0;
+    state.autoRounds = 0;
+
     state.searchCount = 0;
     state.toolPending = null;
     dbg('send', { web: !!s.webSearch, model: s.model, chars: (text || '').length });
@@ -1891,6 +1903,17 @@
     var s = state.cur;
     if (!s) return;
 
+    // 每轮最多自动续 6 段（工具一轮一段）。没有上限的话，模型来回调工具就会无限要钱。
+    state.autoRounds = (state.autoRounds | 0) + 1;
+    if (state.autoRounds > 6) {
+      dbg('auto-round-stop', state.autoRounds);
+      toast('这一轮工具调用太多次了，先停下。可以手动接着聊。');
+      state.streamingId = null;
+      renderComposer();
+      return;
+    }
+    state.lastSendAt = Date.now();
+
     var am = {
       id: uid(), role: 'assistant', content: '', reasoning: '', ts: now(),
       streaming: true, model: s.model, web: true, webQuery: ''
@@ -2246,7 +2269,7 @@
     s.tasks = (s.tasks || []).filter(function (x) { return x && x.id !== id; });
     persist(true);
     renderTaskBar();
-    sendCore('【定时任务提醒】' + t.prompt + '\n（这是你自己定下的时间到了，请照这个提示主动开口；不要提"定时任务"这三个字，像平常一样说话。）', [], { hidden: true });
+    sendCore('【定时任务提醒】' + t.prompt + '\n（这是你自己定下的时间到了，请照这个提示主动开口；不要提"定时任务"这三个字，像平常一样说话。）', [], { hidden: true, auto: true });
   }
 
   /** 会话载入时把任务重新挂上；到点时人不在这个会话的，切回来立刻补触发。 */
@@ -2356,7 +2379,7 @@
     var imgs = (userMsg.images || []).slice();
     s.messages = s.messages.slice(0, u);
     renderMessages();
-    sendCore(text, imgs);
+    sendCore(text, imgs, { auto: true });
   }
 
   function autosize() {
@@ -4954,12 +4977,24 @@
       // DeepSeek 思考模式要求把上一轮的 reasoning_content 原样回传：
       // 撞到这个错就打开开关，同一轮自动重发一次，用户不必手动重试
       var msgText = String(o.msg || '');
-      if (m && /reasoning_content/i.test(msgText) && !m.reasonBounced) {
+      if (m && /reasoning_content/i.test(msgText)) {
+        // 注意：regenerate() 会删掉这条消息重新发，于是「已重试过」的标记也跟着没了，
+        // 再撞一次又重发——以前就是这样无限循环把余额烧掉的。所以计数放在 state 上。
+        state.bounceCount = (state.bounceCount | 0) + 1;
+        if (state.bounceCount > 2) {
+          m.streaming = false;
+          m.error = '服务商一直要求回传思考内容，自动重试 2 次仍失败，先停下。可以手动点「重新生成」，或在设置里换个模型。';
+          updateMessageNode(m);
+          renderComposer();
+          persist(true);
+          dbg('bounce-stop', state.bounceCount);
+          return;
+        }
         m.reasonBounced = true;
         m.error = '';
         m.content = '';
         state.reasoningBounce = true;
-        toast('服务商要求回传思考内容，已自动打开并重试');
+        toast('服务商要求回传思考内容，已自动打开并重试（第 ' + state.bounceCount + ' 次）');
         renderMessages();
         regenerate(m.id);
         persist(true);
