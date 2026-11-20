@@ -1079,7 +1079,7 @@
         } else if (m.content && m.content.trim() && !m.error) {
           // 回灌历史时把 <<remember …>> / <<mood …>> 这类控制标记摘掉：
           // 否则模型会学着在正文里写它们，标记越积越多
-          out.push(asst(m, stripSearchDisplay(stripCtrlTags(m.content))));
+          out.push(asst(m, stripSearchDisplay(stripCtrlTags(m.content, s && s.petLink === true))));
         }
       } else if (m.role === 'tool') {
         if (m.pending) continue;
@@ -1953,12 +1953,32 @@
   var CTRL_TAG_RE = new RegExp('<<\\s*(?:' + CTRL_WORDS + ')\\b[^<>\\n]{0,240}?>>', 'gi');
   var CTRL_HALF_RE = new RegExp('<<\\s*(?:' + CTRL_WORDS + ')\\b[^<>\\n]{0,240}$', 'i');
 
-  function stripCtrlTags(text) {
+  function stripCtrlTags(text, keepMood) {
     if (!text) return text || '';
-    var out = String(text).replace(CTRL_TAG_RE, '');
+    var out = String(text);
+    var kept = [];
+    // 开启情趣联动时，历史里要留住模型自己写过的 <<mood …>>：
+    // 全摘掉的话它会慢慢忘了这个习惯，联动就「自己失灵」了。
+    if (keepMood) {
+      out = out.replace(/<<\s*mood\b[^<>\n]{0,240}?>>/gi, function (m0) { kept.push(m0); return '\u0001'; });
+    }
+    out = out.replace(CTRL_TAG_RE, '');
     out = out.replace(CTRL_HALF_RE, '');   // 流式过程中还没闭合的半截
+    if (kept.length) {
+      var ki = 0;
+      out = out.replace(/\u0001/g, function () { return kept[ki++] || ''; });
+    }
     out = out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
     return out.replace(/\s+$/, '');
+  }
+
+  /** 读出 <<mood n=7 e=害羞 ch=both hold=6000>> 里的情绪词，作为给情趣版的 value。 */
+  function parseMoodTag(text) {
+    if (!text) return '';
+    var m = /<<\s*mood\b([^>]*)>>/i.exec(String(text));
+    if (!m) return '';
+    var g = /(?:^|\s)e\s*=\s*([^\s>]+)/i.exec(m[1]);
+    return g ? g[1].trim().slice(0, 12) : '';
   }
 
   /**
@@ -5248,6 +5268,7 @@
 
         // 情趣联动：把本轮回复交给情趣版解析隐藏指令
         if (s0SettingsPetLink() && !m.error) {
+          m.mood = parseMoodTag(m.content || '');
           pushPetReply(stripEmo(m.content || ''), m.mood || '');
         }
 
