@@ -10,7 +10,8 @@
   var st = {
     mode: 'easy', sched: null,
     target: 20, applied: 0, running: false,
-    scale: 0.2, limit: 20,
+    scale: 0.5, limit: 20,   // scale = 安全标准（实际强度 = 面板等级 × scale）
+    fireP: 1.0,   // 触发概率：1 = 每轮都动手（不掷骰子）
     cyMax: 40, cyHoldMin: 4000, cyHoldMax: 60000,
     ycHoldMin: 4000, ycHoldMax: 60000,
     frA: 60, frB: 60, inA: 20, inB: 20, frMin: 30, frMax: 200,
@@ -132,6 +133,7 @@
     $('dev-close').addEventListener('click', closePanel);
     $('dev-back').addEventListener('click', back);
 
+    loadLimits();   // 先读回安全标准等设置，再建视图，否则滑块显示的是默认值
     buildBrandView();
     buildDgView();
     buildYcyView();
@@ -221,12 +223,34 @@
       '<div class="sock-row"><label>B 等级</label>' +
       '<input type="range" id="cy-b" min="0" max="100" step="1" value="0" style="flex:1">' +
       '<span class="dbg-val" id="cy-bv">0</span></div>' +
+      '<div class="dev-sec">软上限</div>' +
+      '<div class="sock-row"><label>软上限</label>' +
+      '<input type="range" id="cy-limit" min="5" max="100" step="1" value="30" style="flex:1">' +
+      '<span class="dbg-val" id="cy-limitv">30</span></div>' +
+      '<div class="dev-hint" id="cy-limithint">写入设备（BF 指令，断电保存）。任何路径都超不过这个值，两端都会被截断。</div>' +
+      '<div class="dev-sec">安全标准</div>' +
+      '<div class="sock-row"><label>安全标准</label>' +
+      '<input type="range" id="cy-safe" min="0.1" max="1" step="0.05" value="0.5" style="flex:1">' +
+      '<span class="dbg-val" id="cy-safev">0.50</span></div>' +
+      '<div class="dev-hint" id="cy-safehint">实际强度 = 面板等级 × 安全标准。默认 0.5，最大 1（等于面板值）。等级 100 × 0.5 → 设备 50，再受软上限截断。</div>' +
+      '<div class="sock-row"><label>触发概率</label>' +
+      '<input type="range" id="cy-firep" min="0.1" max="1" step="0.1" value="1" style="flex:1">' +
+      '<span class="dbg-val" id="cy-firepv">100%</span></div>' +
+      '<div class="dev-hint" id="cy-firehint">1.0 = 每轮都动手；调低就变成「这次有概率不理他」。</div>' +
       '<div class="sock-row"><label>频率 A</label>' +
       '<input type="range" id="cy-frA" min="10" max="240" step="1" value="60" style="flex:1">' +
       '<span class="dbg-val" id="cy-frAv">60</span></div>' +
       '<div class="sock-row"><label>强度 A</label>' +
       '<input type="range" id="cy-inA" min="0" max="100" step="1" value="20" style="flex:1">' +
       '<span class="dbg-val" id="cy-inAv">20</span></div>' +
+      '<div class="sock-row"><label>频率 B</label>' +
+      '<input type="range" id="cy-frB" min="10" max="240" step="1" value="60" style="flex:1">' +
+      '<span class="dbg-val" id="cy-frBv">60</span></div>' +
+      '<div class="sock-row"><label>强度 B</label>' +
+      '<input type="range" id="cy-inB" min="0" max="100" step="1" value="20" style="flex:1">' +
+      '<span class="dbg-val" id="cy-inBv">20</span></div>' +
+      '<button class="dev-btn" id="cy-test" style="margin-top:8px">自检（会把参数和回执打进日志）</button>' +
+      '<button class="dev-btn" id="cy-ramp" style="margin-top:8px">跟随核对（逐级升强度，只看设备回报，不用贴身）</button>' +
       '<button class="dev-emergency sm" id="cy-stopall">停 止 输 出</button>' +
       '<button class="dev-reset" id="cy-reset">重 置 郊 狼</button>';
 
@@ -251,22 +275,73 @@
       saveMac('cy', mac);
       if (window.Coyote) window.Coyote.connect(mac);
     });
-    ['cy-a', 'cy-b'].forEach(function () {
-      $('cy-a').addEventListener('input', function () {
+    // 手动 A/B 各自独立：原来两个滑块共用一个监听且都读 cy-a，B 滑块等于没用
+    function cyApplyStrength() {
+      if (!window.Coyote) return;
+      window.Coyote.setStrength(cyStrength(st.cyA), cyStrength(st.cyB));
+      addLog('手动强度 → A 等级 ' + st.cyA + '（设备 ' + cyStrength(st.cyA) + '）  B 等级 ' + st.cyB + '（设备 ' + cyStrength(st.cyB) + '）');
+    }
+    ['cy-a', 'cy-b'].forEach(function (id) {
+      $(id).addEventListener('input', function () {
         st.cyA = Number($('cy-a').value);
         st.cyB = Number($('cy-b').value);
         $('cy-av').textContent = st.cyA;
         $('cy-bv').textContent = st.cyB;
+        cyApplyStrength();
+      });
+
+    });
+    // 安全标准：实际强度 = 面板等级 × 安全标准（默认 0.5，最大 1）
+    function updateSafeHint() {
+      var el = $('cy-safehint');
+      if (!el) return;
+      el.textContent = '实际强度 = 面板等级 × ' + st.scale.toFixed(2)
+        + '。等级 100 → 设备 ' + Math.round(100 * st.scale)
+        + '（软上限 ' + st.limit + ' 封顶）；当前 A 等级 ' + st.cyA + ' → 设备 ' + cyStrength(st.cyA)
+        + '，B 等级 ' + st.cyB + ' → 设备 ' + cyStrength(st.cyB) + '。';
+    }
+    if ($('cy-limit')) {
+      $('cy-limit').value = st.limit;
+      $('cy-limitv').textContent = st.limit;
+      $('cy-limit').addEventListener('input', function () {
+        st.limit = Math.round(Number(this.value));
+        $('cy-limitv').textContent = st.limit;
+        saveLimits();
+        if (window.Coyote) window.Coyote.setLimit(st.limit, st.limit);
+        updateSafeHint();
+        addLog('软上限 → ' + st.limit + '（已写 BF，设备断电保存）');
+      });
+    }
+    if ($('cy-safe')) {
+      $('cy-safe').value = st.scale;
+      $('cy-safev').textContent = st.scale.toFixed(2);
+      $('cy-safe').addEventListener('input', function () {
+        st.scale = Number(this.value);
+        $('cy-safev').textContent = st.scale.toFixed(2);
+        saveLimits();
+        updateSafeHint();
         if (window.Coyote) window.Coyote.setStrength(cyStrength(st.cyA), cyStrength(st.cyB));
       });
-    });
-    ['cy-frA', 'cy-inA'].forEach(function (id) {
-      $(id).addEventListener('input', function () {
-        st.frA = Number($('cy-frA').value);
-        st.inA = Number($('cy-inA').value);
-        $('cy-frAv').textContent = st.frA;
-        $('cy-inAv').textContent = st.inA;
-        if (window.Coyote) window.Coyote.setPulse(cyFreq(st.frA), st.inA, cyFreq(st.frA), st.inA);
+      updateSafeHint();
+    }
+    if ($('cy-firep')) {
+      $('cy-firep').value = st.fireP;
+      $('cy-firepv').textContent = Math.round(st.fireP * 100) + '%';
+      $('cy-firep').addEventListener('input', function () {
+        st.fireP = Number(this.value);
+        $('cy-firepv').textContent = Math.round(st.fireP * 100) + '%';
+        saveLimits();
+        addLog('触发概率 → ' + Math.round(st.fireP * 100) + '%');
+      });
+    }
+    ['cy-frA', 'cy-inA', 'cy-frB', 'cy-inB'].forEach(function (id) {
+      $(id).addEventListener('input', function (e) {
+        var k = e.target.id, v = Number(e.target.value);
+        if (k === 'cy-frA') { st.frA = v; $('cy-frAv').textContent = v; }
+        else if (k === 'cy-inA') { st.inA = v; $('cy-inAv').textContent = v; }
+        else if (k === 'cy-frB') { st.frB = v; $('cy-frBv').textContent = v; }
+        else { st.inB = v; $('cy-inBv').textContent = v; }
+        if (window.Coyote) window.Coyote.setPulse(cyFreq(st.frA), st.inA, cyFreq(st.frB), st.inB);
       });
     });
     ['cy-cap', 'cy-fmin', 'cy-fmax'].forEach(function (id) {
@@ -283,6 +358,11 @@
     });
     buildDualRange('cy-range', 4, 60, st.cyHoldMin / 1000, st.cyHoldMax / 1000, function (lo, hi) {
       st.cyHoldMin = lo * 1000; st.cyHoldMax = hi * 1000; saveLimits();
+    });
+    $('cy-test').addEventListener('click', function () {
+    $('cy-ramp').addEventListener('click', rampCheck);
+      if (!window.Coyote || !window.Coyote.selfCheck) { addLog('原生没这个方法，装的还是旧包'); return; }
+      window.Coyote.selfCheck();
     });
     $('cy-stopall').addEventListener('click', function () {
       st.cyA = st.cyB = 0; st.cyApl = st.cyBpl = 0;
@@ -696,8 +776,10 @@
 
       '<div class="dev-sec">指令日志</div>' +
       '<div class="ai-cmd" id="m-cmds"></div>' +
-      '<div class="dev-log" id="dev-log"></div>';
+      '<div class="sock-row" style="gap:8px"><button class="dev-btn" id="dev-copylog" style="flex:1">复制日志</button></div>' +
+      '<div class="dev-log" id="dev-log" style="max-height:44vh"></div>';
 
+    if ($('dev-copylog')) $('dev-copylog').addEventListener('click', copyLog);
     $('m-modes').querySelectorAll('[data-m]').forEach(function (b) {
       b.addEventListener('click', function () { setMode(b.dataset.m); });
     });
@@ -710,8 +792,8 @@
     $('m-start').addEventListener('click', startAll);
     $('m-stop').addEventListener('click', function () { stopAll(true); });
     $('m-test').addEventListener('click', function () {
-      addLog('测试：模拟 mood n=6 ch=both');
-      window.PetDevice.onReply('（测试）<<mood n=6 e=测试 ch=both hold=4000>>');
+    addLog('测试：模拟 mood n=6 ch=ab')
+    window.PetDevice.onReply('（测试）<<mood n=6 e=测试 ch=ab hold=4000>>');
     });
 
     $('m-emergency').addEventListener('click', function () {
@@ -911,7 +993,8 @@
         });
         var score = clamp(Number(kv.n) || 0, 0, 10);
         emo = kv.e || '';
-        any = fireByMood(score, emo, (kv.ch || 'both').toLowerCase(), Number(kv.hold) || 0);
+        any = fireByMood(score, emo, (kv.ch || 'ab').toLowerCase(), Number(kv.hold) || 0);
+      addLog('收到 mood n=' + score + ' ch=' + (kv.ch || 'ab') + (any ? ' → 已下发' : ' → 未触发'));
       }
       st.linkCount++;
       st.linkAt = Date.now();
@@ -921,12 +1004,22 @@
     }
   };
 
+  /** 通道选择：a=郊狼A / b=郊狼B / ab=两个通道 / yc=杯子 / all=全上（兼容旧 cy / cup / both）。 */
+  function parseCh(raw) {
+    var s = String(raw || '').toLowerCase().trim();
+    if (s === 'a' || s === 'cya') return { a: true, b: false, cup: false };
+    if (s === 'b' || s === 'cyb') return { a: false, b: true, cup: false };
+    if (s === 'yc' || s === 'cup') return { a: false, b: false, cup: true };
+    if (s === 'ab' || s === 'cy' || s === 'ba') return { a: true, b: true, cup: false };
+    return { a: true, b: true, cup: true };
+  }
+
   function fireByMood(score, emo, ch, kvHold) {
     if (score <= 0) { report(0, 0, 'mood0', 0); return false; }
     var now = Date.now();
     if (now - lastFireAt < 12000) { addLog('冷却中'); report(0, 0, 'cooldown', 0); return false; }
 
-    var p = (TRIGGER_P[st.mode] || 0.5) * (0.4 + score / 10 * 0.9);
+    var p = st.fireP >= 0.999 ? 1 : st.fireP * (0.55 + score / 10 * 0.45);
     if (Math.random() > p) {
       addLog('概率未中（' + Math.round(p * 100) + '%）');
       report(0, 0, 'roll', 0);
@@ -939,13 +1032,16 @@
     var holdCy = clamp(raw, st.cyHoldMin, st.cyHoldMax);
     var holdYc = clamp(raw, st.ycHoldMin, st.ycHoldMax);
 
-    var cy = (ch === 'cy' || ch === 'both') ? cyClampSpeed(cyStrength(allowed)) : 0;
-    var cup = (ch === 'yc' || ch === 'both') ? clamp(Math.round(allowed / 100 * 20), 0, 20) : 0;
-    var ems = (ch === 'cy' || ch === 'both') ? emsOf(allowed) : 0;
+    var pick = parseCh(ch);
+    var cyLv = cyClampSpeed(cyStrength(allowed));
+    var cyA = pick.a ? cyLv : 0;
+    var cyB = pick.b ? cyLv : 0;
+    var cup = pick.cup ? clamp(Math.round(allowed / 100 * 20), 0, 20) : 0;
+    var ems = (pick.a || pick.b) ? emsOf(allowed) : 0;
 
-    if (st.cyOn && window.Coyote && cy > 0) {
-      st.cyApl = st.cyBpl = cy;
-      window.Coyote.setStrengthTimed(cy, cy, holdCy);
+    if (st.cyOn && window.Coyote && (cyA > 0 || cyB > 0)) {
+      st.cyApl = cyA; st.cyBpl = cyB;
+      window.Coyote.setStrengthTimed(cyA, cyB, holdCy);
     }
     if (st.cupOn && window.Coyote && cup > 0) {
       st.cupSpeed = { a: cup, b: cup, c: cup };
@@ -956,12 +1052,21 @@
       window.Coyote.ycyEmsFixedTimed(ems, st.emsMode, holdCy);
     }
 
+    /* 设备失败检测：模型点名要的设备，如果没连接/没勾选，就记下来回报给语见 */
+    var wantCy = (pick.a || pick.b);
+    var wantYc = pick.cup;
+    var fail = [];
+    if (wantCy && (!st.cyOn || !window.Coyote)) fail.push('cy');
+    if (wantYc && (!st.cupOn || !window.Coyote)) fail.push('yc');
+    if (wantCy && st.cyOn && st.emsOn === false && window.Coyote && ems > 0) { /* 电击器走同一路，不单独报 */ }
+    if (fail.length) addLog('设备失败：' + fail.join(',') + '（未连接或未勾选）');
+
     st.applied = allowed;
     lastFireAt = now;
-    st.aiCmds.unshift(emo + ' ' + score + '/10 → 郊狼 ' + cy + ' · 杯 ' + cup + ' · 电 ' + ems);
+    st.aiCmds.unshift(emo + ' ' + score + '/10 · ' + ch + ' → A ' + cyA + ' · B ' + cyB + ' · 杯 ' + cup + ' · 电 ' + ems + (fail.length ? ' ⚠' + fail.join(',') : ''));
     if (st.aiCmds.length > 8) st.aiCmds.pop();
     renderCmds(); render();
-    report(cy, cup, emo + score, ems);
+    report(Math.max(cyA, cyB), cup, emo + score + '|' + ch + (fail.length ? '|fail:' + fail.join(',') : ''), ems);
     return true;
   }
 
@@ -1014,14 +1119,54 @@
 
   /* ================= 渲染 ================= */
 
+  /** 跟随核对：逐级设定强度，看设备 B1 回报是否跟着变——不接触身体也能证明固件真的收下了 */
+  function rampCheck() {
+    if (!window.Coyote) { addLog('跟随核对：原生接口不可用'); return; }
+    var steps = [5, 10, 20, 30];
+    var i = 0;
+    addLog('===== 跟随核对：A 从 5 逐级升到 30（每级 1.5 秒）=====');
+    addLog('看下面 "通知 ← B1 .." 行的第 3 个字节，应该跟着 05 → 0A → 14 → 1E 变化');
+    (function next() {
+      if (i >= steps.length) { addLog('===== 跟随核对结束 ====='); return; }
+      var v = steps[i++];
+      st.cyA = v;
+      st.cyApl = v;
+      window.Coyote.setStrength(v, st.cyB || 0);
+      addLog('设定 A=' + v + '（设备等级）');
+      setTimeout(next, 1500);
+    })();
+  }
+
   function addLog(s) {
     if (/扫描结束|停止扫描|扫描完成/.test(s)) hideLoading();
     logs.push(s);
-    if (logs.length > 80) logs.shift();
+    if (logs.length > 300) logs.shift();
     var el = $('dev-log');
-    if (el) {
-      el.innerHTML = logs.slice(-8).map(function (x) { return '<div>' + esc(x) + '</div>'; }).join('');
-      el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    // 只有原本就在底部时才自动跟随；用户往上翻就不要再把他拽下来
+    var atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 16;
+    var d = document.createElement('div');
+    d.textContent = s;
+    el.appendChild(d);
+    while (el.children.length > 200) el.removeChild(el.firstChild);
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }
+
+  /** 把日志整段复制到剪贴板，方便贴给我看（截图截不全十几行） */
+  function copyLog() {
+    var text = logs.join('\n');
+    if (!text) { addLog('还没有日志'); return; }
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      addLog('日志已复制（' + logs.length + ' 行），粘贴出来即可');
+    } catch (e) {
+      addLog('复制失败：' + e.message);
     }
   }
 
@@ -1148,7 +1293,8 @@
       localStorage.setItem('petLimits', JSON.stringify({
         cyHoldMin: st.cyHoldMin, cyHoldMax: st.cyHoldMax,
         ycHoldMin: st.ycHoldMin, ycHoldMax: st.ycHoldMax,
-        cyMax: st.cyMax, frMin: st.frMin, frMax: st.frMax
+        cyMax: st.cyMax, frMin: st.frMin, frMax: st.frMax,
+        scale: st.scale, fireP: st.fireP, limit: st.limit
       }));
     } catch (e) { }
   }
@@ -1162,6 +1308,9 @@
       if (o.ycHoldMax) st.ycHoldMax = o.ycHoldMax;
       if (o.cyMax) st.cyMax = o.cyMax;
       if (o.frMin) st.frMin = o.frMin;
+      if (typeof o.scale === 'number' && o.scale >= 0.1 && o.scale <= 1) st.scale = o.scale;
+      if (typeof o.fireP === 'number' && o.fireP >= 0.1 && o.fireP <= 1) st.fireP = o.fireP;
+      if (typeof o.limit === 'number' && o.limit >= 5 && o.limit <= 100) st.limit = o.limit;
       if (o.frMax) st.frMax = o.frMax;
     } catch (e) { }
   }

@@ -56,6 +56,16 @@ public class PetNative {
     }
 
     @JavascriptInterface
+    public void testFrame(int a, int b) {
+        act.runOnUiThread(() -> act.coyote.testFrame(a, b));
+    }
+
+    @JavascriptInterface
+    public void selfCheck() {
+        act.runOnUiThread(() -> act.coyote.selfCheck());
+    }
+
+    @JavascriptInterface
     public void aiSend(String baseUrl, String key, String model, String messagesJson, double temp) {
         try {
             org.json.JSONArray msgs = new org.json.JSONArray(messagesJson);

@@ -29,6 +29,21 @@ public class PetReceiver extends BroadcastReceiver {
         MainActivity act = MainActivity.current();
         if (act != null) {
             act.dispatch(type, value, text);
+            return;
+        }
+
+        // 进程里的界面已经不在了：把事件塞进 Intent 把界面拉起来，
+        // MainActivity 会在页面加载完后补发这一条（见 pendingPet / onNewIntent）。
+        try {
+            Intent i = new Intent(context, MainActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            i.putExtra("pet_event_type", type);
+            i.putExtra("pet_event_value", value);
+            i.putExtra("pet_event_text", text);
+            context.startActivity(i);
+            Log.d(TAG, "no activity, launching UI for queued event");
+        } catch (Exception e) {
+            Log.w(TAG, "startActivity for event failed", e);
         }
     }
 }

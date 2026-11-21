@@ -2,6 +2,7 @@ package dev.local.yujian.pet;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
@@ -28,6 +29,10 @@ public class MainActivity extends Activity {
     private static WeakReference<MainActivity> INSTANCE = new WeakReference<>(null);
 
     private WebView web;
+    /** 页面 JS 是否已经加载完（loadUrl 之前 eval 会被丢掉） */
+    private volatile boolean pageReady = false;
+    /** 页面没准备好时收到的联动事件，等 onPageFinished 再补发 */
+    private volatile String[] pendingPet = null;
     Coyote coyote;
     YcyBridge ycy;
     YcyToy ycyToy;
@@ -55,9 +60,43 @@ public class MainActivity extends Activity {
     }
 
     void dispatch(String type, String value, String text) {
-        if (web == null) return;
+        if (web == null || !pageReady) {
+            // 页面还没加载好：先存着，等 onPageFinished 补发，别把这一轮丢了
+            pendingPet = new String[]{type, value, text};
+            Log.d(TAG, "dispatch queued (pageReady=" + pageReady + ") type=" + type);
+            return;
+        }
         String js = "window.PetEvent && window.PetEvent(" + jsStr(type) + "," + jsStr(value) + "," + jsStr(text) + ")";
         eval(js);
+    }
+
+    /** 页面就绪后，把排队的那一条补发出去 */
+    private void flushPendingPet() {
+        String[] p = pendingPet;
+        if (p == null) return;
+        pendingPet = null;
+        Log.d(TAG, "flush queued event type=" + p[0]);
+        String js = "window.PetEvent && window.PetEvent(" + jsStr(p[0]) + "," + jsStr(p[1]) + "," + jsStr(p[2]) + ")";
+        eval(js);
+    }
+
+    /** 从「被广播唤起」的 Intent 里取出联动事件 */
+    private static String[] petFromIntent(Intent it) {
+        if (it == null) return null;
+        String t = it.getStringExtra("pet_event_type");
+        if (t == null) return null;
+        return new String[]{t, it.getStringExtra("pet_event_value"), it.getStringExtra("pet_event_text")};
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String[] p = petFromIntent(intent);
+        if (p != null) {
+            Log.d(TAG, "onNewIntent event type=" + p[0]);
+            dispatch(p[0], p[1], p[2]);
+        }
     }
 
     private static String jsStr(String s) {
@@ -116,6 +155,15 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         INSTANCE = new WeakReference<>(this);
+        pendingPet = petFromIntent(getIntent());
+        // 常驻前台服务：切回语见聊天后进程不被冻结，蓝牙和联动继续有效
+        try {
+            android.content.Intent svc = new android.content.Intent(this, PetService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc);
+            else startService(svc);
+        } catch (Exception e) {
+            Log.w(TAG, "start PetService failed", e);
+        }
 
         int bg = Color.parseColor("#0f1115");
         getWindow().setBackgroundDrawable(new ColorDrawable(bg));
@@ -235,7 +283,14 @@ public class MainActivity extends Activity {
             }
         });
 
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                pageReady = true;
+                Log.d(TAG, "page ready: " + url);
+                flushPendingPet();
+            }
+        });
 
         setContentView(web);
         web.loadUrl("file:///android_asset/index.html");

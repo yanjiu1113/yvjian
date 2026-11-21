@@ -52,7 +52,8 @@ public class Coyote {
     private static final int MAX_STRENGTH = 200;
 
     private static final int MODE_NO_CHANGE = 0x0;
-    private static final int MODE_ABSOLUTE = 0x3;
+    // 模式 4bit：高 2 位 = A 通道解读方式，低 2 位 = B 通道；0b11 = 绝对值
+    private static final int MODE_ABSOLUTE = 0xF;   // A、B 都用「绝对强度」，否则另一路永远不生效
 
     public interface Listener {
         void onDevices(JSONArray list);
@@ -86,10 +87,17 @@ public class Coyote {
     private volatile String deviceAddr = "";
     private volatile long lastNotifyAt = 0;
     private volatile boolean writeBusy = false;
+    private volatile int notifyCount = 0;
 
     // 协议调试开关
     private volatile boolean bfEnabled = true;    // 是否发送 BF 软上限
-    private volatile boolean flipNibble = true;  // B0 第2字节：序列号/解析方式是否互换
+    // 字节序（B0 第 2 字节）：高 4 位 = 序列号，低 4 位 = 强度解读方式（官方文档规定）。
+    // 实证：发 0xF0（旧写法）时设备回报 "B1 0F 00 00"——它把 0xF 当序列号回显、把低 4 位 0 当"不改变"，
+    // 所以强度始终没生效。正确帧头是 0x0F（序列号 0 + A/B 都绝对）。
+    private volatile boolean flipNibble = false;
+    volatile int lastActualA = -1, lastActualB = -1;
+    private int savedStrengthA = 0;
+    volatile long lastB1At = 0;
     private volatile int pulseFreqA = 60;         // A 通道波形频率 10-240
     private volatile int pulseFreqB = 60;         // B 通道波形频率
     private volatile int pulseIntenA = 20;        // A 通道波形强度 0-100（0 = 没电流）
@@ -309,10 +317,82 @@ public class Coyote {
     }
 
     public void setStrength(int a, int b) {
-        strengthA = clamp(a, 0, limitA);
-        strengthB = clamp(b, 0, limitB);
+        int na = clamp(a, 0, limitA), nb = clamp(b, 0, limitB);
+        boolean changed = (na != strengthA || nb != strengthB);
+        strengthA = na;
+        strengthB = nb;
         if (!streaming) startStream();
+        if (changed) {
+            byte[] probe = buildB0(0, strengthA, strengthB, MODE_ABSOLUTE, flipNibble,
+                    pulseFreqA, pulseIntenA, pulseFreqB, pulseIntenB);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 6; i++) sb.append(String.format("%02X ", probe[i] & 0xFF));
+            log("强度 A=" + strengthA + " B=" + strengthB + "  帧头：" + sb.toString().trim()
+                    + "（字节序=" + (flipNibble ? "交换" : "标准") + "，模式=0x" + Integer.toHexString(MODE_ABSOLUTE) + "）");
+        }
         pushState();
+    }
+
+    /** 一键自检：把会影响输出的每一个变量都打出来，方便判断卡在哪一环 */
+    public void selfCheck() {
+        log("===== 郊狼自检 =====");
+        log("连接=" + connected + "  streaming=" + streaming
+                + "  地址=" + deviceAddr);
+        log("写通道=" + (chWrite == null ? "null" : chWrite.getUuid().toString())
+                + "  通知通道=" + (chNotify == null ? "null" : chNotify.getUuid().toString()));
+        if (chWrite != null) log("写通道属性=" + chWrite.getProperties());
+        log("软上限 A=" + limitA + " B=" + limitB + "  BF发送=" + bfEnabled);
+        log("模式=0x" + Integer.toHexString(MODE_ABSOLUTE) + "  字节序=" + (flipNibble ? "交换(模式在高)" : "标准(序列号在高)")
+                + "  序列号=0(固定)");
+        log("波形 A 频率=" + pulseFreqA + " 强度=" + pulseIntenA
+                + "  B 频率=" + pulseFreqB + " 强度=" + pulseIntenB);
+        log("当前强度 A=" + strengthA + " B=" + strengthB);
+        log("已收到通知帧数=" + notifyCount
+                + (lastNotifyAt > 0 ? ("  最近一次 " + (System.currentTimeMillis() - lastNotifyAt) + "ms 前") : "  （从没收到）"));
+        // 发一帧 A=10 的绝对强度，再用设备回报核对——这是唯一能证明帧头对不对的证据
+        savedStrengthA = strengthA;
+        strengthA = 10;   // 让 100ms 常规流也发 10，否则核对时已被 0 覆盖
+        testFrame(10, 0);
+        main.postDelayed(() -> verifyNibble(10, false), 500);
+    }
+
+    /** 核对：设备回报的 A 是否等于我们发的值；若不对则自动换一种字节序再试一次 */
+    private void verifyNibble(int want, boolean second) {
+        int got = lastActualA;
+        String order = flipNibble
+                ? "0x" + Integer.toHexString((MODE_ABSOLUTE & 0x0F) << 4)
+                : "0x" + Integer.toHexString((MODE_ABSOLUTE & 0x0F) | 0x00);
+        if (got == want) {
+            strengthA = savedStrengthA;
+            log("回执核对 ✓ 发 A=" + want + "，设备回报 A=" + got + "（帧头 " + order + " 正确）");
+            log("===== 自检结束 =====");
+            return;
+        }
+        log("回执核对 ✗ 发 A=" + want + "，设备回报 A=" + (got < 0 ? "无回执" : got) + "（帧头 " + order + " 无效）");
+        if (!second) {
+            flipNibble = !flipNibble;
+            log("自动改试另一种字节序：字节序=" + (flipNibble ? "交换(模式在高)" : "标准(序列号在高)"));
+            lastActualA = -1;
+            testFrame(want, 0);
+            main.postDelayed(() -> verifyNibble(want, true), 500);
+            return;
+        }
+        strengthA = savedStrengthA;
+        log("两种字节序都被设备判为无效——问题不在帧头，请把这段日志发出来");
+        log("===== 自检结束 =====");
+    }
+
+    /** 诊断用：立刻发一帧绝对强度并打印完整 20 字节，同时把设备回报也打出来 */
+    public void testFrame(int a, int b) {
+        if (!connected) { log("测试发帧：还没连上"); return; }
+        int na = clamp(a, 0, Math.max(limitA, 200));
+        int nb = clamp(b, 0, Math.max(limitB, 200));
+        byte[] f = buildB0(0, na, nb, MODE_ABSOLUTE, flipNibble,
+                pulseFreqA, pulseIntenA, pulseFreqB, pulseIntenB);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < f.length; i++) sb.append(String.format("%02X ", f[i] & 0xFF));
+        log("测试帧 A=" + na + " B=" + nb + " → " + sb.toString().trim());
+        write(f);
     }
 
     public void setDebug(boolean sendBf, boolean flip) {
@@ -507,6 +587,7 @@ public class Coyote {
                                  int fA, int iA, int fB, int iB) {
         byte[] f = new byte[20];
         f[0] = (byte) 0xB0;
+        // 官方 B0 第 2 字节：高 4 位 = 序列号，低 4 位 = 强度解读方式
         int head = flip ? (((mode & 0x0F) << 4) | (seq & 0x0F))
                         : (((seq & 0x0F) << 4) | (mode & 0x0F));
         f[1] = (byte) head;
@@ -544,7 +625,9 @@ public class Coyote {
 
     private void writeB0(int a, int b, int mode) {
         if (!connected || chWrite == null) return;
-        write(buildB0(nextSeq(), a, b, mode, flipNibble,
+        // 序列号固定 0：官方文档要求「序列号不为 0 时要等 B1 同序列号回执再改强度」，
+        // 我们每 100ms 重发绝对强度，用非 0 序列号会被设备丢弃 → 表现就是完全没输出。
+        write(buildB0(0, a, b, mode, flipNibble,
                 pulseFreqA, pulseIntenA, pulseFreqB, pulseIntenB));
     }
 
@@ -720,9 +803,16 @@ public class Coyote {
         private void handleNotify(byte[] v) {
             if (v == null || v.length == 0) return;
             lastNotifyAt = System.currentTimeMillis();
+            notifyCount++;
+            {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < v.length && i < 8; i++) sb.append(String.format("%02X ", v[i] & 0xFF));
+                log("通知 ← " + sb.toString().trim());
+            }
             if ((v[0] & 0xFF) == 0xB1 && v.length >= 4) {
                 final int a = v[2] & 0xFF;
                 final int b = v[3] & 0xFF;
+                lastActualA = a; lastActualB = b; lastB1At = System.currentTimeMillis();
                 main.post(() -> {
                     // 设备实际强度回传给界面（不覆盖设定值，只用于显示）
                     try {
