@@ -1921,3 +1921,36 @@ html, body { max-width: 100vw; overflow-x: hidden; }
   text-align: center;
   max-width: 78%;
 }
+
+/* 情趣联动：底部结果提示条 */
+#pet-pill-host {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 8px;
+  z-index: 260;
+  pointer-events: none;
+}
+.pet-pill {
+  position: relative;
+  transform: translateY(14px);
+  min-width: 190px;
+  max-width: 78vw;
+  padding: 10px 16px;
+  border-radius: 16px;
+  background: rgba(38, 26, 30, .94);
+  border: 1px solid rgba(232, 120, 120, .42);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .38);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s cubic-bezier(.3, .8, .3, 1);
+  z-index: 260;
+  text-align: center;
+}
+.pet-pill.show { opacity: 1; transform: translateY(0); }
+.pet-pill .pp-t { font-size: 13px; color: #f0d6d6; letter-spacing: .02em; }
+.pet-pill .pp-s { font-size: 15px; font-weight: 600; color: #fff; margin-top: 4px; }

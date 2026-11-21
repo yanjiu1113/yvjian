@@ -275,6 +275,7 @@
       webSearch: false,
       stickerAuto: false,
       petLink: false,
+  petLinked: false, lastPet: null,
       autoRead: false,
       toolOn: {},
       tasks: [],
@@ -1615,7 +1616,8 @@
     '<<mood n=7 e=害羞 ch=both>>\n' +
     '  n  = 你此刻的情绪强度 1-10（1 平静、5 有点在意、8 心跳加快、10 快绷不住）\n' +
     '  e  = 情绪词（害羞/心动/撒娇/生气/委屈/得意…）\n' +
-    '  ch = 想作用的位置：cy 电击器 / yc 情趣设备 / both 都想要\n' +
+    '  ch = 想作用的位置：a 郊狼A通道 / b 郊狼B通道 / ab 郊狼两个通道一起 / yc 情趣杯 / all 全都上\n' +
+    '       想只弄一个通道就写明 ch=a 或 ch=b；写 ab 或省略会两个通道一起驱动。\n' +
     '  hold = 可选，持续毫秒（4000-60000，即 4-60 秒）。你不写就由客户端按分数决定；\n' +
     '         想奖励他久一点就写大，想惩戒或轻轻带过就写小。\n' +
     '规则：\n' +
@@ -1975,10 +1977,106 @@
   /** 读出 <<mood n=7 e=害羞 ch=both hold=6000>> 里的情绪词，作为给情趣版的 value。 */
   function parseMoodTag(text) {
     if (!text) return '';
+    var o = parseMoodFull(text);
+    return o ? o.emo : '';
+  }
+
+  /** 解析整条 <<mood …>>：返回 {emo,n,hold,ch}，没有就 null */
+  /** 把 ch 归一成 a / b / ab / yc / all（兼容旧的 cy / cup / both）。 */
+  function normCh(raw) {
+    var s = String(raw || '').toLowerCase().trim();
+    if (s === 'a' || s === 'cya') return 'a';
+    if (s === 'b' || s === 'cyb') return 'b';
+    if (s === 'ab' || s === 'cy' || s === 'ba') return 'ab';
+    if (s === 'yc' || s === 'cup') return 'yc';
+    return 'all';
+  }
+
+  function parseMoodFull(text) {
+    if (!text) return null;
     var m = /<<\s*mood\b([^>]*)>>/i.exec(String(text));
-    if (!m) return '';
-    var g = /(?:^|\s)e\s*=\s*([^\s>]+)/i.exec(m[1]);
-    return g ? g[1].trim().slice(0, 12) : '';
+    if (!m) return null;
+    var body = m[1] || '';
+    function pick(k) {
+      var g = new RegExp('(?:^|\\s)' + k + '\\s*=\\s*([^\\s>]+)', 'i').exec(body);
+      return g ? g[1].trim() : '';
+    }
+    var emo = pick('e').slice(0, 12);
+    var n = Number(pick('n'));
+    if (!isFinite(n)) n = 0;
+    n = Math.max(0, Math.min(10, Math.round(n)));
+    var hold = Number(pick('hold'));
+    if (!isFinite(hold) || hold <= 0) hold = 1500 + n * 400;
+    var ch = normCh(pick('ch'));
+    return { emo: emo, n: n, hold: Math.max(500, Math.min(300000, Math.round(hold))), ch: ch };
+  }
+
+  /** 底部提示条：联动状态、本轮强度与时长 */
+  function petPill(title, sub, ms) {
+    try {
+      var host = document.getElementById('pet-pill-host');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'pet-pill-host';
+        document.body.appendChild(host);
+      }
+      var el = document.createElement('div');
+      el.className = 'pet-pill';
+      el.innerHTML = '<div class="pp-t"></div><div class="pp-s"></div>';
+      el.querySelector('.pp-t').textContent = title;
+      el.querySelector('.pp-s').textContent = sub || '';
+      host.appendChild(el);
+      requestAnimationFrame(function () { el.classList.add('show'); });
+      setTimeout(function () {
+        el.classList.remove('show');
+        setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 260);
+      }, ms || 3600);
+    } catch (e) { }
+  }
+
+  /** 情趣版回执：cy = 郊狼实际强度，yc = 杯子，note = 备注 */
+  window.__petReport = function (o) {
+    try {
+      o = o || {};
+      var note = String(o.note || '');
+      var cy = Math.round(Number(o.cy) || 0);
+      var cup = Math.round(Number(o.yc) || 0);
+      var fm = /fail:([a-z,]+)/i.exec(note);
+      var fails = fm ? fm[1].split(',') : [];
+      state.lastPet = { cy: cy, cup: cup, note: note, fail: fails, at: Date.now() };
+      if (!state.petLinked && state.cur && state.cur.petLink) {
+        state.petLinked = true;
+        if (!fails.length) petPill('情趣版已连上', '应用之间通了，和设备有没有输出无关');
+      }
+      if (fails.length && !(cy > 0 || cup > 0)) {
+        var names = fails.map(function (k) { return k === 'cy' ? '郊狼' : (k === 'yc' ? '杯子' : '电击器'); });
+        petPill(names.join(' / ') + '设备失败', '没连上、或没在情趣版里勾选；连好再试一次', 4600);
+        dbg('pet-fail', fails.join(','));
+      }
+      dbg('pet-report', note + ' cy=' + cy + ' cup=' + cup);
+    } catch (e) { }
+  };
+
+  /** AI 说完之后显示这一轮实际执行的强度与时长 */
+  function showPetResult() {
+    try {
+      var plan = window.__petPlan;
+      if (!plan || Date.now() - (window.__petPlanAt || 0) > 8000) return;
+      var rep = state.lastPet;
+      // 只有「真的收到了回执、而且确实输出了」才弹。其它情况一律静默：
+      // 没回执、设备没连、概率没过、冷却中——这些都是内部状态，弹出来只会像报错。
+      if (!rep || Date.now() - rep.at > 4000) { dbg('pet-no-report', { n: plan.n, ch: plan.ch }); return; }
+      if (rep.fail && rep.fail.length) { dbg('pet-fail-silent', rep.fail.join(',')); return; }
+      var gotCy = Number(rep.cy) || 0;
+      var gotCup = Number(rep.cup) || 0;
+      if (!(gotCy > 0 || gotCup > 0)) { dbg('pet-idle', String(rep.note || '')); return; }
+      var secs = (plan.hold / 1000).toFixed(1).replace(/\.0$/, '');
+      var parts = [];
+      if (gotCy > 0) parts.push('郊狼 ' + gotCy);
+      if (gotCup > 0) parts.push('杯子 ' + gotCup);
+      petPill('情趣版 · ' + (plan.emo || '无情绪词') + ' ' + plan.n + '/10',
+        parts.join('　') + '　　时间：' + secs + ' 秒', 4200);
+    } catch (e) { dbg('pet-result-error', { msg: String((e && e.message) || e) }); }
   }
 
   /**
@@ -3951,7 +4049,7 @@
     $('#ms-pet').addEventListener('click', function () {
       var s2 = state.cur;
       if (!s2) return;
-      s2.petLink = !s2.petLink;
+      s2.petLink = !s2.petLink; state.petLinked = false;
       this.classList.toggle('on', s2.petLink);
       persist(true);
       toast(s2.petLink ? '情趣联动已开启' : '情趣联动已关闭');
@@ -5102,16 +5200,8 @@
     } catch (e) { }
   }
 
-  window.__petReport = function (hyphenFree) {
-    try {
-      var o = typeof hyphenFree === 'string' ? JSON.parse(hyphenFree) : hyphenFree;
-      var txt = '电击 ' + (o.cy || 0) + ' / 情趣 ' + (o.yc || 0) +
-        (o.note ? '（' + o.note + '）' : '');
-      state.meta.petMemo = txt;
-      saveMeta();
-      dbg('pet', '回执：' + txt);
-    } catch (e) { }
-  };
+  // 旧的 __petReport（只写 petMemo、不做失败判断）已删除：它定义在文件后面，
+  // 会把上面那版整个覆盖掉，导致 3.90/3.91 的失败弹窗全部失效。
 
   window.__bridge = {
     // 设备结果（拍照 / 指南针 / 水平仪）由原生回填到这里。
@@ -5268,8 +5358,14 @@
 
         // 情趣联动：把本轮回复交给情趣版解析隐藏指令
         if (s0SettingsPetLink() && !m.error) {
-          m.mood = parseMoodTag(m.content || '');
+          var moodFull = parseMoodFull(m.content || '');
+          m.mood = moodFull ? moodFull.emo : '';
           pushPetReply(stripEmo(m.content || ''), m.mood || '');
+          if (moodFull && moodFull.n > 0) {
+            window.__petPlan = moodFull;
+            window.__petPlanAt = Date.now();
+            setTimeout(function () { showPetResult(); }, 900);
+          }
         }
 
         // 只调用工具、没有文字的回复是合法的：把空白的助手气泡去掉。
