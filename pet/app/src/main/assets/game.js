@@ -537,10 +537,35 @@
     window.addEventListener('resize', function () { if (running) resize(); });
   }
 
+  var devTimer = 0;
+
+  function renderDevBar() {
+    var el = overlay.querySelector('#game-devbar');
+    if (!el) return;
+    var list = [];
+    try { list = (window.PetDevStatus && window.PetDevStatus()) || []; } catch (e) { list = []; }
+    if (!list.length) { el.classList.remove('show'); el.innerHTML = ''; return; }
+    el.classList.add('show');
+    el.innerHTML = list.map(function (d) {
+      return '<span class="gd gd-' + d.k + '"><b>' + d.name + '</b>' + d.v + '</span>';
+    }).join('');
+  }
+
+  function startDevBar() {
+    renderDevBar();
+    if (devTimer) clearInterval(devTimer);
+    devTimer = setInterval(renderDevBar, 500);
+  }
+
+  function stopDevBar() {
+    if (devTimer) { clearInterval(devTimer); devTimer = 0; }
+  }
+
   function open() {
     if (!overlay) return;
     overlay.classList.add('show');
     running = true;
+    startDevBar();
     resize();
     G.best = Number(localStorage.getItem('jumpBest') || 0);
     reset();
@@ -550,6 +575,7 @@
 
   function close() {
     running = false;
+    stopDevBar();
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
     if (overlay) overlay.classList.remove('show');
@@ -565,6 +591,7 @@
       '<div class="game-shade"></div>' +
       '<canvas id="game-canvas"></canvas>' +
       '<div class="game-top">' +
+        '<div id="game-devbar" class="game-devbar"></div>' +
         '<button id="game-close" class="game-btn">退出</button>' +
       '</div>' +
       '<div class="game-tip">按住屏幕蓄力，松开起跳</div>' +

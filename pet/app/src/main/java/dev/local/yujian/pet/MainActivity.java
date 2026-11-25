@@ -21,6 +21,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends Activity {
 
@@ -28,11 +30,24 @@ public class MainActivity extends Activity {
     private static final int REQ_BT = 1001;
     private static WeakReference<MainActivity> INSTANCE = new WeakReference<>(null);
 
+    /** 每种设备最多支持的同类型实例数（slot 0..3） */
+    static final int MAX_SLOT = 4;
+
     private WebView web;
     /** 页面 JS 是否已经加载完（loadUrl 之前 eval 会被丢掉） */
     private volatile boolean pageReady = false;
     /** 页面没准备好时收到的联动事件，等 onPageFinished 再补发 */
     private volatile String[] pendingPet = null;
+
+    /**
+     * 同类型多设备池：列表下标就是 JS 侧的 slot 编号。
+     * 0 号懒创建后即 0.103 时代的那一台，其余按需创建，互不影响。
+     */
+    final List<Coyote> cyPool = new ArrayList<>();
+    final List<YcyToy> ycyPool = new ArrayList<>();
+    final List<YcyToy> emsPool = new ArrayList<>();
+
+    /** slot 0 的别名（PetNative 的兜底、onDestroy、旧代码都还能直接用） */
     Coyote coyote;
     YcyBridge ycy;
     YcyToy ycyToy;
@@ -151,6 +166,123 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ================= 同类型多设备：实例池 =================
+
+    /** 第 slot 台郊狼；越界返回 null，不足则懒创建 */
+    synchronized Coyote coyoteFor(int slot) {
+        if (slot < 0 || slot >= MAX_SLOT) return null;
+        while (cyPool.size() <= slot) {
+            final int s = cyPool.size();
+            cyPool.add(new Coyote(this, coyoteListener(s)));
+        }
+        return cyPool.get(slot);
+    }
+
+    /** 第 slot 台榨精杯（devId=0） */
+    synchronized YcyToy ycyToyFor(int slot) {
+        if (slot < 0 || slot >= MAX_SLOT) return null;
+        while (ycyPool.size() <= slot) {
+            final int s = ycyPool.size();
+            ycyPool.add(new YcyToy(this, ycyListener(s, "cup", false)));
+        }
+        return ycyPool.get(slot);
+    }
+
+    /** 第 slot 台电击器（devId=1, emsRole=true） */
+    synchronized YcyToy emsToyFor(int slot) {
+        if (slot < 0 || slot >= MAX_SLOT) return null;
+        while (emsPool.size() <= slot) {
+            final int s = emsPool.size();
+            YcyToy t = new YcyToy(this, ycyListener(s, "ems", true));
+            t.devId = 1;
+            t.emsRole = true;
+            emsPool.add(t);
+        }
+        return emsPool.get(slot);
+    }
+
+    /** 日志前缀：0 号保持 0.103 的原样，其它实例加槽位标记，便于排查 */
+    private static String slotTag(String kind, int slot, String line) {
+        if (slot <= 0) return line;
+        return "[" + kind + (slot + 1) + "] " + (line == null ? "" : line);
+    }
+
+    private Coyote.Listener coyoteListener(final int slot) {
+        return new Coyote.Listener() {
+            @Override
+            public void onDevices(JSONArray list) {
+                final String js;
+                try {
+                    JSONObject o = new JSONObject();
+                    o.put("slot", slot);
+                    o.put("pool", "cy");
+                    o.put("devices", list == null ? new JSONArray() : list);
+                    js = o.toString();
+                } catch (Exception e) {
+                    return;
+                }
+                runOnUiThread(() -> { eval("window.CoyoteDev && window.CoyoteDev.onDevices(" + js + ")"); });
+            }
+
+            @Override
+            public void onState(JSONObject state) {
+                final String js;
+                try {
+                    state.put("slot", slot);
+                    state.put("pool", "cy");
+                    js = state.toString();
+                } catch (Exception e) {
+                    return;
+                }
+                runOnUiThread(() -> { eval("window.CoyoteDev && window.CoyoteDev.onState(" + js + ")"); });
+            }
+
+            @Override
+            public void onLog(String line) {
+                final String s = slotTag("郊狼", slot, line);
+                runOnUiThread(() -> { eval("window.CoyoteDev && window.CoyoteDev.onLog(" + jsStr(s) + ")"); });
+            }
+        };
+    }
+
+    private YcyToy.Listener ycyListener(final int slot, final String pool, final boolean ems) {
+        return new YcyToy.Listener() {
+            @Override
+            public void onDevices(JSONArray arr) {
+                final String js;
+                try {
+                    JSONObject o = new JSONObject();
+                    o.put("slot", slot);
+                    o.put("pool", pool);
+                    o.put("devices", arr == null ? new JSONArray() : arr);
+                    js = o.toString();
+                } catch (Exception e) {
+                    return;
+                }
+                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onDevices(" + js + ")"); });
+            }
+
+            @Override
+            public void onState(JSONObject o) {
+                final String js;
+                try {
+                    o.put("slot", slot);
+                    o.put("pool", pool);
+                    js = o.toString();
+                } catch (Exception e) {
+                    return;
+                }
+                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onState(" + js + ")"); });
+            }
+
+            @Override
+            public void onLog(String line) {
+                final String s = slotTag(ems ? "电击器" : "榨精杯", slot, line);
+                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onLog(" + jsStr(s) + ")"); });
+            }
+        };
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -171,41 +303,10 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        coyote = new Coyote(this, new Coyote.Listener() {
-            @Override
-            public void onDevices(JSONArray list) {
-                runOnUiThread(() -> { eval("window.CoyoteDev && window.CoyoteDev.onDevices(" + list.toString() + ")"); });
-            }
-
-            @Override
-            public void onState(JSONObject state) {
-                runOnUiThread(() -> { eval("window.CoyoteDev && window.CoyoteDev.onState(" + state.toString() + ")"); });
-            }
-
-            @Override
-            public void onLog(String line) {
-                runOnUiThread(() -> { eval("window.CoyoteDev && window.CoyoteDev.onLog(" + jsStr(line) + ")"); });
-            }
-        });
-
-        emsToy = new YcyToy(this, new YcyToy.Listener() {
-            @Override
-            public void onDevices(org.json.JSONArray arr) {
-                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onDevices(" + arr.toString() + ")"); });
-            }
-
-            @Override
-            public void onState(org.json.JSONObject o) {
-                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onState(" + o.toString() + ")"); });
-            }
-
-            @Override
-            public void onLog(String line) {
-                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onLog(" + jsStr(line) + ")"); });
-            }
-        });
-        emsToy.devId = 1;
-        emsToy.emsRole = true;
+        // slot 0 就是 0.103 的那几台；其余槽位等 JS 点了「再加一台」才创建
+        coyote = coyoteFor(0);
+        emsToy = emsToyFor(0);
+        ycyToy = ycyToyFor(0);
 
         ai = new AiChat(new AiChat.Listener() {
             @Override
@@ -221,23 +322,6 @@ public class MainActivity extends Activity {
             @Override
             public void onLog(String line) {
                 eval("window.AiDev && window.AiDev.onLog(" + jsStr(line) + ")");
-            }
-        });
-
-        ycyToy = new YcyToy(this, new YcyToy.Listener() {
-            @Override
-            public void onDevices(JSONArray list) {
-                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onDevices(" + list.toString() + ")"); });
-            }
-
-            @Override
-            public void onState(JSONObject state) {
-                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onState(" + state.toString() + ")"); });
-            }
-
-            @Override
-            public void onLog(String line) {
-                runOnUiThread(() -> { eval("window.YcyDev && window.YcyDev.onLog(" + jsStr(line) + ")"); });
             }
         });
 
@@ -333,19 +417,22 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         if (INSTANCE.get() == this) INSTANCE = new WeakReference<>(null);
         if (ai != null) { try { ai.cancel(); } catch (Exception ignored) { } }
-        if (emsToy != null) {
-            try { emsToy.emergencyStop(); emsToy.disconnect(); } catch (Exception ignored) { }
+        // 所有槽位一起收尾：先急停再断开，避免有实例漏掉还在输出
+        for (YcyToy t : new ArrayList<>(emsPool)) {
+            try { t.emergencyStop(); t.disconnect(); } catch (Exception ignored) { }
         }
-        if (ycyToy != null) {
-            try { ycyToy.emergencyStop(); ycyToy.disconnect(); } catch (Exception ignored) { }
+        for (YcyToy t : new ArrayList<>(ycyPool)) {
+            try { t.emergencyStop(); t.disconnect(); } catch (Exception ignored) { }
         }
-        if (coyote != null) {
-            try {
-                coyote.emergencyStop();
-                coyote.disconnect();
-            } catch (Exception ignored) {
-            }
+        for (Coyote c : new ArrayList<>(cyPool)) {
+            try { c.emergencyStop(); c.disconnect(); } catch (Exception ignored) { }
         }
+        synchronized (cyPool) { cyPool.clear(); }
+        synchronized (ycyPool) { ycyPool.clear(); }
+        synchronized (emsPool) { emsPool.clear(); }
+        coyote = null;
+        ycyToy = null;
+        emsToy = null;
         if (web != null) {
             web.destroy();
             web = null;

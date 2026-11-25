@@ -38,8 +38,8 @@ $src = Join-Path $root "app\src\main"
 $out = Join-Path $root "build"
 $dist = Join-Path $root "dist"
 
-$versionCode = "96"
-$versionName = "0.96"
+$versionCode = "104"
+$versionName = "0.104"
 $apkName = "YujianPet-$versionName.apk"
 
 if (-not (Test-Path $androidJar)) { throw "Android SDK not found at $sdk" }

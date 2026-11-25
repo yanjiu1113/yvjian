@@ -225,22 +225,18 @@ html, body {
   left: 0;
   right: 0;
   bottom: 0;
-  max-height: 82vh;
-  display: flex;
+  top: calc(52px + env(safe-area-inset-top));
+  display: none;
   flex-direction: column;
   overflow: hidden;
-  padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
-  background: rgba(16, 19, 25, .97);
-  border-top: 1px solid rgba(255, 255, 255, .08);
-  border-radius: 18px 18px 0 0;
-  transform: translateY(105%);
-  transition: transform .22s ease;
+  padding: 12px 14px calc(16px + env(safe-area-inset-bottom));
+  background: #000;
   z-index: 30;
   color: #e8ecf3;
   font-size: 13px;
 }
 
-.devpanel.show { transform: none; }
+.devpanel.show { display: flex; }
 
 .dev-view {
   flex: 1 1 auto;
@@ -1257,3 +1253,237 @@ html, body {
   line-height: 1.6;
   color: #b9c2d0;
 }
+/* ================= 主界面（纯黑 + 顶栏标签） ================= */
+body.bare { background: #000; }
+body.bare #room { display: none; }
+
+/* 顶部常驻标签栏：左边是已打开的设备标签，右边是加号 */
+.homebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(52px + env(safe-area-inset-top));
+  padding: calc(env(safe-area-inset-top) + 6px) 10px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #000;
+  border-bottom: 1px solid rgba(255, 255, 255, .07);
+  z-index: 31;
+}
+
+.home-plus {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 19px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .05);
+  color: #f4f4f6;
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .12s, background .12s;
+}
+.home-plus:active { background: rgba(255, 255, 255, .13); transform: scale(.94); }
+
+.pickmask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .68);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s;
+  z-index: 40;
+}
+.pickmask.show { opacity: 1; pointer-events: auto; }
+
+.picksheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  transform: translateY(103%);
+  transition: transform .24s cubic-bezier(.2, .8, .2, 1);
+  background: #0b0b0d;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 22px 22px 0 0;
+  padding: 6px 16px calc(20px + env(safe-area-inset-bottom));
+  max-height: 78vh;
+  overflow-y: auto;
+}
+.picksheet.show { transform: none; }
+
+.pick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 2px 4px;
+  font-size: 15px;
+  color: #f1f1f4;
+}
+.pick-x { font-size: 13px; color: rgba(255, 255, 255, .45); }
+
+.pick-group {
+  margin: 14px 2px 7px;
+  font-size: 11.5px;
+  letter-spacing: .16em;
+  color: rgba(255, 255, 255, .34);
+}
+
+.pick-card {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 15px 14px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  background: rgba(255, 255, 255, .035);
+  color: #e9e9ee;
+}
+.pick-card b { font-size: 15px; font-weight: 600; }
+.pick-card i { font-style: normal; font-size: 11.5px; color: rgba(255, 255, 255, .4); }
+.pick-card:active { border-color: rgba(210, 86, 78, .6); background: rgba(255, 255, 255, .07); }
+.pick-card.off { opacity: .34; pointer-events: none; }
+
+/* ================= 设备标签页（浏览器式） ================= */
+.dev-tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+  margin-bottom: 12px;
+}
+
+.dev-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.dev-tabs::-webkit-scrollbar { display: none; }
+
+.dev-tab {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 44vw;
+  padding: 8px 8px 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  background: rgba(255, 255, 255, .04);
+  color: rgba(255, 255, 255, .6);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.dev-tab .tab-name { overflow: hidden; text-overflow: ellipsis; }
+.dev-tab.on {
+  background: rgba(210, 86, 78, .2);
+  border-color: rgba(210, 86, 78, .55);
+  color: #fff;
+}
+.dev-tab:active { background: rgba(255, 255, 255, .09); }
+
+.tab-x {
+  width: 17px;
+  height: 17px;
+  line-height: 15px;
+  text-align: center;
+  border-radius: 9px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .42);
+  background: rgba(255, 255, 255, .06);
+}
+.dev-tab.on .tab-x { color: rgba(255, 255, 255, .8); }
+
+/* 空态提示（没有打开任何设备时） */
+.home-empty {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 45%;
+  text-align: center;
+  color: rgba(255, 255, 255, .22);
+  font-size: 13px;
+  letter-spacing: .06em;
+  z-index: 6;
+  pointer-events: none;
+}
+
+/* 顶栏里的标签：比在面板里更紧凑 */
+.homebar .dev-tab {
+  height: 32px;
+  padding: 0 8px 0 11px;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+.homebar .dev-tabs { align-items: center; height: 40px; }
+
+/* ===== 总控台：渐强目标下拉 ===== */
+.dev-pick{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:11px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.10);
+  background:rgba(255,255,255,.04);color:#e8ecf3;font-size:14px}
+.dev-pick:active{background:rgba(255,255,255,.08)}
+.dev-pick i{font-style:normal;opacity:.6;font-size:12px}
+.pick-list{display:none;flex-direction:column;margin:6px 0 10px;border-radius:12px;overflow:hidden;
+  border:1px solid rgba(255,255,255,.10);background:rgba(24,27,33,.98)}
+.pick-list.show{display:flex}
+.pick-list button{appearance:none;border:0;background:transparent;color:#dfe5ee;text-align:left;
+  padding:11px 14px;font-size:14px;border-bottom:1px solid rgba(255,255,255,.06)}
+.pick-list button:last-child{border-bottom:0}
+.pick-list button.on{background:rgba(190,60,70,.22);color:#ffd9dd}
+.pick-list button:disabled{opacity:.35}
+
+/* 小游戏：顶部已连接设备实时状态 */
+.game-devbar {
+  position: absolute;
+  left: 50%;
+  top: calc(52px + env(safe-area-inset-top));
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 8px;
+  max-width: 88vw;
+  pointer-events: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.game-devbar::-webkit-scrollbar { display: none; }
+.game-devbar.show { display: flex; }
+.game-devbar .gd {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(14,16,20,.62);
+  border: 1px solid rgba(255,255,255,.12);
+  color: #f2f5fa;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+}
+.game-devbar .gd b { font-weight: 600; opacity: .72; font-size: 11.5px; }
+.game-devbar .gd-cy { border-color: rgba(255,120,130,.45); }
+.game-devbar .gd-cup { border-color: rgba(120,200,255,.40); }
+.game-devbar .gd-ems { border-color: rgba(255,200,110,.45); }
+
+/* 0.104 同类型多设备：多标签更紧凑 + 选设备弹层提示可重复添加 */
+.pick-hint{font-size:11.5px;line-height:1.55;color:#8c8f96;padding:10px 2px 2px}
+.dev-tabs{gap:4px}
+.homebar .dev-tab{max-width:38vw}
+.dev-view[data-slot]{padding-right:2px}
